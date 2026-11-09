@@ -98,6 +98,17 @@ PY
       echo "missing venv at $PY" >&2
       exit 1
     fi
+    # load secrets (DATA_PATH, tokens) without printing them
+    if [[ -f /home/box/.desk_secrets ]]; then
+      set -a
+      # shellcheck disable=SC1091
+      source /home/box/.desk_secrets
+      set +a
+    fi
+    if [[ -z "${TYPESAFE_API_KEY:-}" || -z "${TG_TOKEN:-}" ]]; then
+      echo "TYPESAFE_API_KEY or TG_TOKEN missing" >&2
+      exit 1
+    fi
     # survive this shell
     setsid nohup "$PY" "$ROOT/main.py" >>"$LOG" 2>&1 < /dev/null &
     echo $! > "$PIDFILE"
