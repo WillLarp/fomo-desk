@@ -33,6 +33,21 @@ def _reason_h1(pct: float) -> str:
     return f"{sign}{pct:.0f}% in 1h"
 
 
+def first_kill(*, liq, top10, h1, name="", symbol="", runners=None,
+               min_liq=40_000, max_top=25, max_h1=80):
+    """Return the first kill reason in Scanner order, or None."""
+    if liq is not None and liq < min_liq:
+        return _reason_liq(liq)
+    if top10 is not None and top10 > max_top:
+        return _reason_top10(top10)
+    if h1 is not None and h1 > max_h1:
+        return _reason_h1(h1)
+    hit = is_copycat(name, symbol, runners or [])
+    if hit:
+        return f"copycat of {hit}"
+    return None
+
+
 def _normalize_holders(accounts: list, exclude: set[str], supply: float | None) -> float | None:
     """Sum top 10 holder percentages after dropping pool/curve accounts."""
     rows = []
@@ -152,10 +167,13 @@ async def _decide(mint: str, pair: dict, meta: dict) -> None:
     h1 = pair.get("priceChange", {}).get("h1") if isinstance(pair.get("priceChange"), dict) else None
     created = iso_to_ts(pair.get("pairCreatedAt")) or meta.get("migrated_at")
     age = age_min(created)
-    # kill order
+    # kill order: liquidity, top 10, h1, copycat
     min_liq = float(config.get("scanner.min_liquidity_usd"))
-    if liq is not None and liq < min_liq:
-        await _finish(_payload(mint, name, symbol, pool, liq, None, h1, age, "kill", _reason_liq(liq)))
+    # cheap liq check first (no RPC)
+    early = first_kill(liq=liq, top10=None, h1=None, name="", symbol="", runners=[],
+                       min_liq=min_liq, max_top=100, max_h1=10**9)
+    if early:
+        await _finish(_payload(mint, name, symbol, pool, liq, None, h1, age, "kill", early))
         return
     # top 10 — need RPC; report if we have one cached on the coin
     report = None
@@ -168,17 +186,13 @@ async def _decide(mint: str, pair: dict, meta: dict) -> None:
             meta["creator"] = creator
     top10 = await _top10_pct(mint, pool, report)
     max_top = float(config.get("scanner.max_top10_pct"))
-    if top10 is not None and top10 > max_top:
-        await _finish(_payload(mint, name, symbol, pool, liq, top10, h1, age, "kill", _reason_top10(top10)))
-        return
     max_h1 = float(config.get("scanner.max_h1_change_pct"))
-    if h1 is not None and h1 > max_h1:
-        await _finish(_payload(mint, name, symbol, pool, liq, top10, h1, age, "kill", _reason_h1(h1)))
-        return
-    # copycat against today's runners
-    hit = is_copycat(name, symbol, db.runners_today())
-    if hit:
-        await _finish(_payload(mint, name, symbol, pool, liq, top10, h1, age, "kill", f"copycat of {hit}"))
+    reason = first_kill(
+        liq=liq, top10=top10, h1=h1, name=name, symbol=symbol,
+        runners=db.runners_today(), min_liq=min_liq, max_top=max_top, max_h1=max_h1,
+    )
+    if reason:
+        await _finish(_payload(mint, name, symbol, pool, liq, top10, h1, age, "kill", reason))
         return
     # record as a runner if it itself is a runner (for later copycats)
     h24 = pair.get("priceChange", {}).get("h24") if isinstance(pair.get("priceChange"), dict) else None
