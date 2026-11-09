@@ -35,7 +35,10 @@ def test_freeze_authority_from_recorded_fixture():
             }
         }
         FIXTURE_DIR.mkdir(exist_ok=True)
-        fixture.write_text(json.dumps(sample, indent=2))
+        if fixture.is_file():
+            sample = json.loads(fixture.read_text())
+        else:
+            fixture.write_text(json.dumps(sample, indent=2) + "\n")
         info = parsed_mint_info(sample)
         freeze = info.get("freezeAuthority")
         source = "tests/fixtures/rpc_freeze_set.json"
