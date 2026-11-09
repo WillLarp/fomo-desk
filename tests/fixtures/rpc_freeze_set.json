@@ -1,0 +1,15 @@
+{
+  "value": {
+    "data": {
+      "parsed": {
+        "info": {
+          "mintAuthority": null,
+          "freezeAuthority": "Freeze11111111111111111111111111111111111",
+          "supply": "1000000000",
+          "decimals": 6
+        }
+      }
+    }
+  },
+  "note": "Crafted fixture for acceptance test 5: a mint with freeze authority set. Not a live account."
+}

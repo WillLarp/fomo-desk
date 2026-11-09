@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+data/
+*.sqlite
+*.sqlite-*
+logs/
+owner_chat_id
+screenshots/
+.desk_pid
+desk.pid
+.pytest_cache/
+.playwright/
+node_modules/
+# never commit secrets or the publish tree that contains DATA_PATH
+publish/
+d/
+secrets/
+.desk_secrets
