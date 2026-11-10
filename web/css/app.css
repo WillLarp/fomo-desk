@@ -64,12 +64,10 @@ svg { display: block; }
   padding: calc(var(--sat) + 6px) calc(var(--g) + var(--sar)) 8px calc(var(--g) + var(--sal));
   display: flex; align-items: center; gap: 10px;
   min-height: calc(var(--sat) + 52px);
-  background: rgba(0,0,0,0.72);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+  background: #000;
 }
 .nav .grow { flex: 1; min-width: 0; }
-.nav-title { font-weight: 600; font-size: 17px; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.nav-title { font-weight: 600; font-size: 17px; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; background: none; }
 .nav-title .chev { color: var(--text3); font-weight: 500; }
 .nav-center {
   position: absolute; left: 0; right: 0; text-align: center; pointer-events: none;
@@ -328,6 +326,10 @@ svg { display: block; }
 }
 .price-sub { padding: 2px calc(var(--g) + var(--sal)) 0; font-size: 15px; font-weight: 600; }
 .candles { position: relative; height: 300px; margin-top: 14px; }
+.page[data-page="coin"].has-pos .price { padding-top: 8px; font-size: 40px; line-height: 46px; }
+.page[data-page="coin"].has-pos .candles { height: 210px; margin-top: 8px; }
+.page[data-page="coin"].has-pos .stats-grid div { padding: 8px 0; }
+
 .candles canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .stats-grid { display: grid; grid-template-columns: 1fr 1fr; margin: 0 var(--g); }
 .stats-grid div { padding: 12px 0; border-bottom: 0.5px solid var(--sep); display: flex; justify-content: space-between; gap: 8px; font-size: 15px; }

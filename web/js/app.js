@@ -99,9 +99,12 @@
     t.textContent = msg; t.hidden = false;
     clearTimeout(t._h); t._h = setTimeout(function () { t.hidden = true; }, 2200);
   }
+  function fomoHandle() {
+    var h = ((S.account && S.account.fomo_handle) || (S.state && S.state.handle) || "").replace(/^@/, "");
+    return h;
+  }
   function initial() {
-    var h = ((S.account && S.account.fomo_handle) || (S.state && S.state.handle) || "G").replace(/^@/, "");
-    return (h.charAt(0) || "G").toUpperCase();
+    return (fomoHandle().charAt(0) || "G").toUpperCase();
   }
   function seenId() { return Number(localStorage.getItem("desk_seen_act") || 0); }
   function markSeen() {
@@ -253,7 +256,7 @@
     var unread = hasUnread() ? '<i class="dot"></i>' : "";
     return '<div class="nav">' +
       '<button class="iconbtn" data-go="account" aria-label="Account"><span class="avatar">' + esc(initial()) + "</span></button>" +
-      '<div class="grow"><span class="nav-title">Grok Bot <span class="chev">›</span></span></div>' +
+      '<div class="grow"><button class="nav-title" data-go="account">' + esc(fomoHandle() || "Grok Bot") + ' <span class="chev">›</span></button></div>' +
       '<button class="iconbtn" data-search aria-label="Search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/></svg></button>' +
       '<button class="iconbtn" data-go="activity" aria-label="Notifications"><svg viewBox="0 0 24 24"><path d="M6.4 9.2a5.6 5.6 0 1 1 11.2 0c0 3.4 1.3 5.3 2.1 6.6H4.3c.8-1.3 2.1-3.2 2.1-6.6z"/><path d="M10 18.2a2 2 0 0 0 4 0"/></svg>' + unread + "</button>" +
       "</div>";
@@ -632,7 +635,8 @@
 
   function renderCoin() {
     var c = S.coin, mint = S.coinMint;
-    var html = '<section class="page pushed" data-page="coin">' + navBack("Coin") + offlineRow() + fixtureFlag();
+    var pos0 = c && c.position;
+    var html = '<section class="page pushed' + (pos0 ? ' has-pos' : '') + '" data-page="coin">' + navBack((c && c.name) || "Coin") + offlineRow() + fixtureFlag();
     if (!c) {
       html += '<div class="hero"><div class="sk" style="width:140px;height:28px"></div><div class="sk" style="width:200px;height:44px;margin-top:16px"></div></div>';
       html += '<div class="candles"><div class="sk" style="position:absolute;inset:16px;border-radius:12px"></div></div></section>';
@@ -665,7 +669,7 @@
     html += "</div>";
     var pos = c.position;
     if (pos) {
-      html += '<div class="card" style="margin-top:16px"><h3>Your position · ' + esc(money(pos.sizeUsd)) + " in · Executor</h3>";
+      html += '<div class="card pos-card" style="margin-top:16px"><h3>Your position · ' + esc(money(pos.sizeUsd)) + " in · Executor</h3>";
       html += '<div class="kv"><span>Stop line</span><b>' + esc((window.Charts ? window.Charts.fmtPrice(pos.stopPrice) : money(pos.stopPrice, 6))) + "</b></div>";
       html += '<div class="kv"><span>Trail line</span><b>' + esc(pos.trailActive && pos.trailPrice != null ? (window.Charts ? window.Charts.fmtPrice(pos.trailPrice) : money(pos.trailPrice, 6)) : "—") + "</b></div>";
       var left = "";
@@ -690,7 +694,11 @@
     if (canvas && S.coin && window.Charts) {
       charts.candles = new window.Charts.CandleChart(canvas);
       var pos = S.coin.position;
-      charts.candles.setData(S.coin.candles || [], S.coin.exitLine, pos && pos.entryPrice);
+      var exitLine = S.coin.exitLine;
+      if (exitLine == null && pos) {
+        exitLine = (pos.trailActive && pos.trailPrice != null) ? pos.trailPrice : pos.stopPrice;
+      }
+      charts.candles.setData(S.coin.candles || [], exitLine, pos && pos.entryPrice);
     }
   }
 
