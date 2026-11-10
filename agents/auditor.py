@@ -15,7 +15,7 @@ import lease
 import stamps
 import pipeline
 from sources import rpc, rugcheck
-from util import age_min, ts, utcnow_iso
+from util import pool_age_min, pool_created_ts, ts, utcnow_iso
 
 log = logging.getLogger("auditor")
 
@@ -298,17 +298,17 @@ async def audit(scan: dict) -> dict:
 
     # ---- 6 pool age ----
     t = time.monotonic()
-    migrated = coin.get("migrated_at")
-    age = age_min(migrated)
+    created = pool_created_ts(coin.get("migrated_at"), scan.get("pairCreatedAt"))
+    age = pool_age_min(coin.get("migrated_at"), scan.get("pairCreatedAt"))
     min_age = int(config.get("auditor.min_pool_age_min"))
-    if not migrated:
-        layer = _layer(6, False, "no data: pool age", "rpc")
+    if not created:
+        layer = _layer(6, False, "no data: pool age", "migration")
         first_red = layer["value"]
     elif age < min_age:
-        layer = _layer(6, False, "pool too young", "rpc")
+        layer = _layer(6, False, "pool too young", "migration")
         first_red = layer["value"]
     else:
-        layer = _layer(6, True, f"{age}m", "rpc")
+        layer = _layer(6, True, f"{age}m", "migration")
     layers.append(layer)
     checked = 6
     await _emit(mint, layer, int((time.monotonic() - t) * 1000))

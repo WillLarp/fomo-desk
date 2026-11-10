@@ -13,7 +13,7 @@ import db
 import lease
 import stamps
 from sources import dexscreener, pumpportal, rpc, rugcheck
-from util import age_min, as_float, is_copycat, iso_to_ts, ts, utcnow_iso
+from util import age_min, as_float, is_copycat, pool_age_min, ts, utcnow_iso
 
 log = logging.getLogger("scanner")
 
@@ -168,8 +168,7 @@ async def _decide(mint: str, pair: dict, meta: dict) -> None:
     pool = pair.get("pairAddress") or meta.get("pool")
     liq = pair.get("liquidityUsd")
     h1 = pair.get("priceChange", {}).get("h1") if isinstance(pair.get("priceChange"), dict) else None
-    created = iso_to_ts(pair.get("pairCreatedAt")) or meta.get("migrated_at")
-    age = age_min(created)
+    age = pool_age_min(meta.get("migrated_at"), pair.get("pairCreatedAt"))
     # kill order: liquidity, top 10, h1, copycat
     min_liq = float(config.get("scanner.min_liquidity_usd"))
     # cheap liq check first (no RPC)

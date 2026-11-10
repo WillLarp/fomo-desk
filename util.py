@@ -123,3 +123,25 @@ def age_min(migrated_at: float | None, now: float | None = None) -> int:
     if not migrated_at:
         return 0
     return max(0, int(((now or ts()) - migrated_at) // 60))
+
+
+def pool_created_ts(migrated_at: Any = None, pair_created_at: Any = None) -> float | None:
+    """Unix seconds when the PumpSwap pool was created.
+
+    Prefer coins.migrated_at (PumpPortal migrate receive time, which matches
+    the on-chain migrate blockTime). DexScreener pairCreatedAt is often the
+    older pump.fun listing date, which would make a just-graduated pool look
+    weeks old and skip min_pool_age_min.
+    """
+    migrated = iso_to_ts(migrated_at)
+    if migrated:
+        return migrated
+    return iso_to_ts(pair_created_at)
+
+
+def pool_age_min(
+    migrated_at: Any = None,
+    pair_created_at: Any = None,
+    now: float | None = None,
+) -> int:
+    return age_min(pool_created_ts(migrated_at, pair_created_at), now)
