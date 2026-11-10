@@ -11,6 +11,8 @@ from typing import Any
 import bus
 import config
 import db
+import lease
+import pipeline
 from sources import rpc, rugcheck
 from util import age_min, ts, utcnow_iso
 
@@ -461,9 +463,21 @@ async def run(stop: asyncio.Event) -> None:
         # only lock same-night if we can
         _rejected.add(r["mint"])
     db.beat("auditor", "running", "idle")
+    was_leader = False
     while not stop.is_set():
+        lead = lease.is_leader()
+        if lead and not was_leader:
+            await pipeline.catch_up()
+        was_leader = lead
+        if not lead:
+            db.beat("auditor", "running", "standby")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            continue
         try:
-            scan = await asyncio.wait_for(bus.auditor.get(), timeout=15.0)
+            scan = await asyncio.wait_for(bus.auditor.get(), timeout=1.0)
         except asyncio.TimeoutError:
             db.beat("auditor", "paused" if db.is_paused("auditor") else "running", "idle")
             continue

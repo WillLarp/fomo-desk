@@ -125,16 +125,23 @@ CREATE TABLE IF NOT EXISTS layer8_kills (
   id INTEGER PRIMARY KEY,
   ts REAL, mint TEXT
 );
+CREATE TABLE IF NOT EXISTS action_claims (
+  key TEXT PRIMARY KEY,
+  ts REAL NOT NULL,
+  kind TEXT,
+  instance INTEGER
+);
 """
 
 
 def _connect() -> sqlite3.Connection:
     path = Path(paths.DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
+    con = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None, timeout=5.0)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
+    con.execute("PRAGMA busy_timeout=5000")
     con.execute("PRAGMA foreign_keys=ON")
     return con
 
@@ -216,6 +223,13 @@ def kv_set(key: str, value: Any) -> None:
 
 
 def beat(name: str, status: str = "running", detail: str = "", count: int | None = None) -> None:
+    # File stamp first so a hung sqlite write cannot hide a live process
+    # from the supervisor, and so a hang after this still goes stale quickly.
+    try:
+        import stamps
+        stamps.stamp_agent(name)
+    except Exception:
+        pass
     if count is None:
         row = q1("SELECT count FROM heartbeats WHERE name=?", (name,))
         count = int(row["count"]) if row else 0
@@ -225,6 +239,24 @@ def beat(name: str, status: str = "running", detail: str = "", count: int | None
         "detail=excluded.detail, count=excluded.count",
         (name, now(), status, detail, count),
     )
+
+
+def claim_action(kind: str, key: str) -> bool:
+    """Return True if this process is the first to claim kind+key."""
+    token = f"{kind}:{key}"
+    try:
+        import lease
+        inst = lease.instance_id()
+    except Exception:
+        inst = 0
+    try:
+        execute(
+            "INSERT INTO action_claims(key,ts,kind,instance) VALUES(?,?,?,?)",
+            (token, now(), kind, inst),
+        )
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 
 def inc_beat(name: str, status: str = "running", detail: str = "") -> None:

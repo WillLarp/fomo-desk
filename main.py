@@ -15,6 +15,7 @@ import config
 import db
 import paths
 import publisher
+import lease
 import watchdog
 from agents import analyst, auditor, executor, risk, scanner
 from util import local_now
@@ -86,9 +87,15 @@ async def _to_thread(fn, timeout: float):
 
 
 async def publisher_loop(stop: asyncio.Event) -> None:
-    last_attempt = 0.0
-    first = True
+    last_attempt = float(db.kv_get("publisher.last_pages_push") or 0)
+    first = last_attempt <= 0
     while not stop.is_set():
+        if not lease.is_leader():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            continue
         try:
             await _to_thread(publisher.write_local, timeout=30)
         except Exception:
@@ -98,6 +105,7 @@ async def publisher_loop(stop: asyncio.Event) -> None:
         if first or (now - last_attempt) >= interval:
             first = False
             last_attempt = now
+            db.kv_set("publisher.last_pages_push", last_attempt)
             try:
                 await _to_thread(publisher.publish_pages, timeout=publisher.GIT_PUSH_TIMEOUT_S + 30)
             except Exception:
@@ -123,12 +131,13 @@ async def report_loop(stop: asyncio.Event) -> None:
             hh, mm = 8, 0
         if now.hour == hh and now.minute == mm and last_date != now.date():
             last_date = now.date()
-            text = night_report_text()
-            write_night_json()
-            await push(text, kind="report")
-            # roll the night so "tonight" resets
-            db.end_night()
-            db.start_night(config.get("desk.mode"))
+            if lease.is_leader():
+                text = night_report_text()
+                write_night_json()
+                await push(text, kind="report")
+                # roll the night so "tonight" resets
+                db.end_night()
+                db.start_night(config.get("desk.mode"))
         try:
             await asyncio.wait_for(stop.wait(), timeout=20)
         except asyncio.TimeoutError:
@@ -188,12 +197,14 @@ async def amain() -> None:
     existed_night = db.current_night() is not None
     db.start_night(config.get("desk.mode"))
     log.info(
-        "desk starting mode=%s python=%s night=%s",
+        "desk starting mode=%s python=%s night=%s instance=%s",
         config.get("desk.mode"),
         sys.version.split()[0],
         "resumed" if existed_night else "new",
+        lease.instance_id(),
     )
     stop = asyncio.Event()
+    lease.start()
     watchdog.start()
     tasks = [
         asyncio.create_task(supervised("scanner", scanner.run, stop), name="scanner"),
@@ -206,22 +217,24 @@ async def amain() -> None:
         asyncio.create_task(report_loop(stop), name="report"),
         asyncio.create_task(watchdog.ticker(stop), name="watchdog-tick"),
     ]
-    if not existed_night:
+    if not existed_night and lease.is_leader():
         try:
             await night_start_notice()
         except Exception:
             log.exception("night start notice failed")
     else:
         log.info("skipped night-start push; resuming open night")
-    # write first snapshot off the event loop
-    try:
-        await _to_thread(publisher.write_local, timeout=30)
-    except Exception:
-        log.exception("first snapshot failed")
+    # write first snapshot off the event loop; only the leader touches the tree
+    if lease.is_leader():
+        try:
+            await _to_thread(publisher.write_local, timeout=30)
+        except Exception:
+            log.exception("first snapshot failed")
 
     def _stop(*_):
         stop.set()
         watchdog.stop()
+        lease.stop()
 
     import signal as _signal
 
@@ -233,6 +246,7 @@ async def amain() -> None:
             pass
     await stop.wait()
     watchdog.stop()
+    lease.stop()
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -243,6 +257,7 @@ async def amain() -> None:
 
 
 def main() -> None:
+    lease.parse_instance()
     try:
         asyncio.run(amain())
     except KeyboardInterrupt:

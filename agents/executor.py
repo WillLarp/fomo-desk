@@ -10,6 +10,8 @@ from typing import Any
 import bus
 import config
 import db
+import lease
+import pipeline
 import links
 from sources import dexscreener
 from util import ts, utcnow_iso
@@ -83,6 +85,8 @@ def card(**kw: Any) -> None:
 
 
 def _skip(mint: str, name: str, reason: str, mode: str, price: float | None = None) -> dict:
+    if not db.claim_action("signal", mint):
+        return {"status": "skipped", "reason": "already pushed", "mint": mint, "mode": mode}
     sid = db.insert(
         "signals",
         {
@@ -103,6 +107,15 @@ def _skip(mint: str, name: str, reason: str, mode: str, price: float | None = No
 
 
 def open_position(signal: dict, name: str) -> int:
+    existing = db.q1(
+        "SELECT id FROM positions WHERE mint=? AND status IN ('open','exiting','closing','closed') AND signal_id=?",
+        (signal["mint"], signal["id"]),
+    )
+    if existing:
+        return int(existing["id"])
+    if not db.claim_action("fill", str(signal["id"])):
+        row = db.q1("SELECT id FROM positions WHERE signal_id=?", (signal["id"],))
+        return int(row["id"]) if row else 0
     stop = float(config.get("risk.stop_pct"))
     entry = float(signal["price"])
     timeout_h = float(config.get("risk.timeout_h"))
@@ -300,9 +313,21 @@ async def run(stop: asyncio.Event) -> None:
         _pushed.add(r["mint"])
     db.beat("executor", "running", "idle")
     card()
+    was_leader = False
     while not stop.is_set():
+        lead = lease.is_leader()
+        if lead and not was_leader:
+            await pipeline.catch_up()
+        was_leader = lead
+        if not lead:
+            db.beat("executor", "running", "standby")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            continue
         try:
-            item = await asyncio.wait_for(bus.executor.get(), timeout=15.0)
+            item = await asyncio.wait_for(bus.executor.get(), timeout=1.0)
         except asyncio.TimeoutError:
             db.beat("executor", "paused" if db.is_paused("executor") else "running", "idle")
             continue

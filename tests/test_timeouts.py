@@ -59,3 +59,12 @@ def test_run_git_times_out():
     with pytest.raises(subprocess.TimeoutExpired):
         publisher._run_git(["sleep", "10"], timeout=0.4)
     assert time.monotonic() - t0 < 2
+
+
+def test_pumpportal_does_not_reconnect_on_message_silence():
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / "sources" / "pumpportal.py"
+    text = src.read_text()
+    assert "websocket silent for" not in text
+    assert "ping_interval=20" in text
+    assert "ping_timeout=20" in text

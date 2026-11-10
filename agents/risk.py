@@ -10,6 +10,7 @@ from typing import Any
 import bus
 import config
 import db
+import lease
 import fees
 import links
 from sources import dexscreener
@@ -54,6 +55,9 @@ def evaluate(pos: dict, price: float) -> str | None:
 
 
 async def close_position(pos: dict, price: float, reason: str) -> dict:
+    if not db.claim_action("exit", str(pos["id"])):
+        log.info("exit already claimed %s", pos.get("mint", "")[:8])
+        return {"status": "skipped", "reason": "already claimed", "position_id": pos["id"]}
     entry = float(pos["entry_price"])
     size = float(pos["size_usd"])
     mode = pos.get("mode") or config.get("desk.mode")
@@ -205,6 +209,9 @@ def _card(**kw):
 
 
 async def poll_once() -> None:
+    if not lease.is_leader():
+        db.beat("risk", "running", "standby")
+        return
     positions = [p for p in db.open_positions() if p["status"] in ("open",)]
     # exiting LIVE positions are not re-exited
     _card()

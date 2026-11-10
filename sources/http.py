@@ -99,7 +99,25 @@ def hard_cap(timeout: httpx.Timeout | float | int | None = None) -> float:
 
 
 def _sync_request(method: str, url: str, timeout, kwargs: dict) -> httpx.Response:
-    return _sync_client().request(method, url, timeout=timeout, **kwargs)
+    client = _sync_client()
+    cap = hard_cap(timeout)
+    done = threading.Event()
+
+    def abort():
+        if not done.is_set():
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    timer = threading.Timer(cap, abort)
+    timer.daemon = True
+    timer.start()
+    try:
+        return client.request(method, url, timeout=timeout, **kwargs)
+    finally:
+        done.set()
+        timer.cancel()
 
 
 async def request(method: str, url: str, **kwargs) -> httpx.Response:

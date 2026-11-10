@@ -10,8 +10,6 @@ from typing import Any
 
 import websockets
 
-import config
-from util import utcnow_iso
 
 log = logging.getLogger("pumpportal")
 
@@ -21,20 +19,29 @@ URL = "wss://pumpportal.fun/api/data"
 async def run(on_migration: Callable[[dict], Awaitable[None]], stop: asyncio.Event) -> None:
     delay = 1
     max_delay = 60
-    silence = int(config.get("scanner.ws_silence_s"))
     while not stop.is_set():
         try:
             log.info("connecting to pumpportal")
+            # ping_interval/ping_timeout keep the socket honest; a quiet
+            # market (no migrations) is normal and must not reconnect.
             async with websockets.connect(URL, ping_interval=20, ping_timeout=20, close_timeout=5) as ws:
                 await ws.send(json.dumps({"method": "subscribeMigration"}))
                 log.info("subscribed to migration")
                 delay = 1
                 while not stop.is_set():
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=silence)
-                    except asyncio.TimeoutError:
-                        log.warning("websocket silent for %ss, reconnect", silence)
+                    recv = asyncio.create_task(ws.recv())
+                    waiter = asyncio.create_task(stop.wait())
+                    done, pending = await asyncio.wait(
+                        {recv, waiter}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in pending:
+                        task.cancel()
+                    if waiter in done and recv not in done:
                         break
+                    try:
+                        raw = recv.result()
+                    except Exception:
+                        raise
                     try:
                         msg = json.loads(raw) if isinstance(raw, str) else raw
                     except Exception:

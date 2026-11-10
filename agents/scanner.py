@@ -10,6 +10,7 @@ from typing import Any
 import bus
 import config
 import db
+import lease
 from sources import dexscreener, pumpportal, rpc, rugcheck
 from util import age_min, as_float, is_copycat, iso_to_ts, ts, utcnow_iso
 
@@ -214,6 +215,9 @@ async def _finish(payload: dict) -> None:
     mint = payload["mint"]
     if mint in _decided:
         return
+    if not db.claim_action("scan", mint):
+        _decided.add(mint)
+        return
     _decided.add(mint)
     db.add_scan(payload)
     db.upsert_coin(
@@ -262,6 +266,9 @@ async def on_migration(msg: dict) -> None:
         "ON CONFLICT(mint) DO NOTHING",
         (mint, created, None),
     )
+    if not lease.is_leader():
+        log.info("waiting room %s ingested on standby", mint[:8])
+        return
     # try to get creator + creator balance now
     report, _ = await rugcheck.report(mint)
     creator = (report or {}).get("creator")
@@ -295,6 +302,8 @@ def _touch(detail: str | None = None) -> None:
 async def _poll_waiting() -> None:
     rows = db.q("SELECT * FROM waiting")
     _touch(f"{len(rows)} waiting")
+    if not lease.is_leader():
+        return
     if not rows:
         return
     mints = [r["mint"] for r in rows]
@@ -376,7 +385,7 @@ async def run(stop: asyncio.Event) -> None:
             except Exception:
                 log.exception("scanner liveness beat failed")
             try:
-                await asyncio.wait_for(stop.wait(), timeout=15)
+                await asyncio.wait_for(stop.wait(), timeout=1)
             except asyncio.TimeoutError:
                 continue
 

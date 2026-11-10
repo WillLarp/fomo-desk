@@ -40,6 +40,8 @@ def test_inspect_stale_scanner_and_risk(tmp_path, monkeypatch):
     db.beat("scanner", "running", "0 waiting")
     db.beat("risk", "running", "idle")
     db.execute("UPDATE heartbeats SET ts=?", (now - 200,))
+    watchdog.stamp_agent("scanner", now - 200)
+    watchdog.stamp_agent("risk", now - 200)
     watchdog.touch_loop(now)  # loop is fine; heartbeats are not
     result = watchdog.inspect(now=now)
     assert result["ok"] is False
@@ -84,6 +86,8 @@ def test_check_calls_exit_on_stale(tmp_path, monkeypatch):
     db.beat("scanner", "running", "x")
     db.beat("risk", "running", "x")
     db.execute("UPDATE heartbeats SET ts=?", (now - 200,))
+    watchdog.stamp_agent("scanner", now - 200)
+    watchdog.stamp_agent("risk", now - 200)
     watchdog.touch_loop(now - 200)
     called = []
 

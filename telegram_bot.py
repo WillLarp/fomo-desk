@@ -12,6 +12,7 @@ import httpx
 
 import config
 import db
+import lease
 import links
 import paths
 from sources.http import post as http_post
@@ -72,6 +73,14 @@ def _keyboard(buttons: list[tuple[str, str]] | None) -> dict | None:
 
 
 async def push(text: str, buttons: list[tuple[str, str]] | None = None, mint: str | None = None, kind: str = "") -> bool:
+    if not lease.is_leader():
+        log.info("push skipped: standby kind=%s", kind or "none")
+        return False
+    import hashlib
+    claim_key = f"{kind}:{(mint or '')}:{hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]}"
+    if not db.claim_action("push", claim_key):
+        log.info("push skipped: already claimed kind=%s", kind or "none")
+        return True
     chat = _chat()
     if not chat or not _token():
         log.warning("push skipped: no chat or token")
@@ -289,6 +298,12 @@ async def run(stop: asyncio.Event) -> None:
         return
     log.info("telegram polling as owner chat locked")
     while not stop.is_set():
+        if not lease.is_leader():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            continue
         data = await _api(
             "getUpdates",
             {"timeout": 20, "offset": _offset, "allowed_updates": ["message", "callback_query"]},
