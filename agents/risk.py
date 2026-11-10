@@ -297,7 +297,23 @@ async def run(stop: asyncio.Event) -> None:
             except asyncio.TimeoutError:
                 continue
 
+    async def liveness():
+        while not stop.is_set():
+            try:
+                if lease.is_leader():
+                    row = db.q1("SELECT detail FROM heartbeats WHERE name=?", ("risk",))
+                    db.beat("risk", "running", (row["detail"] if row else "") or "idle")
+                else:
+                    db.beat("risk", "running", "standby")
+            except Exception:
+                log.exception("risk liveness beat failed")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1)
+            except asyncio.TimeoutError:
+                continue
+
     t = asyncio.create_task(drain())
+    live = asyncio.create_task(liveness())
     try:
         while not stop.is_set():
             try:
@@ -310,4 +326,5 @@ async def run(stop: asyncio.Event) -> None:
             except asyncio.TimeoutError:
                 continue
     finally:
+        live.cancel()
         t.cancel()

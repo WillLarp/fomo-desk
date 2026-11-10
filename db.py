@@ -230,6 +230,12 @@ def beat(name: str, status: str = "running", detail: str = "", count: int | None
         stamps.stamp_agent(name)
     except Exception:
         pass
+    try:
+        import lease
+        if lease.enabled() and not lease.is_leader():
+            name = f"{name}:{lease.instance_id()}"
+    except Exception:
+        pass
     if count is None:
         row = q1("SELECT count FROM heartbeats WHERE name=?", (name,))
         count = int(row["count"]) if row else 0
