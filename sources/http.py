@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
 
 import httpx
 
@@ -26,6 +27,8 @@ _tls = threading.local()
 _clients_lock = threading.Lock()
 _sync_clients: list[httpx.Client] = []
 _client: httpx.AsyncClient | None = None
+_http_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="desk-http")
+_dns_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="desk-dns")
 
 
 def install_network_guards() -> None:
@@ -38,7 +41,11 @@ def install_network_guards() -> None:
     def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
         if family == 0:
             family = socket.AF_INET
-        return _orig_getaddrinfo(host, port, family, type, proto, flags)
+        fut = _dns_pool.submit(_orig_getaddrinfo, host, port, family, type, proto, flags)
+        try:
+            return fut.result(timeout=8)
+        except FutTimeout as e:
+            raise socket.gaierror(socket.EAI_AGAIN, "getaddrinfo timed out") from e
 
     socket.getaddrinfo = _ipv4_getaddrinfo  # type: ignore[assignment]
     _installed = True
@@ -99,8 +106,9 @@ async def request(method: str, url: str, **kwargs) -> httpx.Response:
     timeout = kwargs.pop("timeout", DEFAULT_TIMEOUT)
     cap = hard_cap(timeout)
     try:
+        loop = asyncio.get_running_loop()
         return await asyncio.wait_for(
-            asyncio.to_thread(_sync_request, method, url, timeout, kwargs),
+            loop.run_in_executor(_http_pool, _sync_request, method, url, timeout, kwargs),
             timeout=cap,
         )
     except asyncio.TimeoutError as e:

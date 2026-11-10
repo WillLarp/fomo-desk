@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import config
@@ -18,6 +19,8 @@ import paths
 from util import ts
 
 log = logging.getLogger("publisher")
+
+_publish_lock = threading.Lock()
 
 # Local git commands should be quick; the force-push can stall on the network
 # or the credential helper, so it gets a longer but still finite cap.
@@ -236,6 +239,11 @@ def _open_pct(p) -> float | None:
 
 
 def write_local() -> Path:
+    with _publish_lock:
+        return _write_local_unlocked()
+
+
+def _write_local_unlocked() -> Path:
     root = paths.local_data_dir()
     snap = snapshot()
     _write(root, "state.json", snap["state"])
@@ -384,6 +392,13 @@ def publish_pages() -> bool:
     if not (web / "index.html").is_file():
         log.warning("web/index.html missing; skip pages push")
         return False
+    with _publish_lock:
+        return _publish_pages_unlocked()
+
+
+def _publish_pages_unlocked() -> bool:
+    repo_dir = paths.ROOT
+    web = paths.WEB_DIR
     data = paths.local_data_dir()
     # build a temp tree without echoing the secret path
     t0 = __import__("time").monotonic()

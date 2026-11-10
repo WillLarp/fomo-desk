@@ -8,6 +8,7 @@ import logging
 import logging.handlers
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import config
@@ -21,27 +22,40 @@ from util import local_now
 log = logging.getLogger("desk")
 
 
+def _scrub_text(s: str) -> str:
+    for name in ("TYPESAFE_API_KEY", "TG_TOKEN", "DATA_PATH", "VAPID_PRIVATE_KEY", "APP_TOKEN"):
+        val = os.environ.get(name)
+        if val and val in s:
+            s = s.replace(val, f"[{name}]")
+    try:
+        dp = paths.data_path()
+        if dp and dp in s:
+            s = s.replace(dp, "[DATA_PATH]")
+    except Exception:
+        pass
+    return s
+
+
 class _RedactFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        for name in ("TYPESAFE_API_KEY", "TG_TOKEN", "DATA_PATH", "VAPID_PRIVATE_KEY", "APP_TOKEN"):
-            val = os.environ.get(name)
-            if val and val in msg:
-                record.msg = msg.replace(val, f"[{name}]")
-                record.args = ()
         try:
-            dp = paths.data_path()
-            if dp and dp in record.getMessage():
-                record.msg = record.getMessage().replace(dp, "[DATA_PATH]")
-                record.args = ()
+            msg = _scrub_text(record.getMessage())
+            record.msg = msg
+            record.args = ()
         except Exception:
             pass
         return True
 
 
+class _RedactFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        # exc_text is built during format(), so scrub the whole line including tracebacks
+        return _scrub_text(super().format(record))
+
+
 def setup_logging() -> None:
     paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
-    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    fmt = _RedactFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     # clear
@@ -62,8 +76,13 @@ def setup_logging() -> None:
         logging.getLogger(name).propagate = True
 
 
+# One worker so write_local and git push never overlap (they share the same tree).
+_publish_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="desk-pub")
+
+
 async def _to_thread(fn, timeout: float):
-    return await asyncio.wait_for(asyncio.to_thread(fn), timeout=timeout)
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(loop.run_in_executor(_publish_pool, fn), timeout=timeout)
 
 
 async def publisher_loop(stop: asyncio.Event) -> None:
