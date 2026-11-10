@@ -14,6 +14,7 @@ import config
 import db
 import paths
 import publisher
+import watchdog
 from agents import analyst, auditor, executor, risk, scanner
 from util import local_now
 
@@ -23,7 +24,7 @@ log = logging.getLogger("desk")
 class _RedactFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        for name in ("TYPESAFE_API_KEY", "TG_TOKEN", "DATA_PATH"):
+        for name in ("TYPESAFE_API_KEY", "TG_TOKEN", "DATA_PATH", "VAPID_PRIVATE_KEY", "APP_TOKEN"):
             val = os.environ.get(name)
             if val and val in msg:
                 record.msg = msg.replace(val, f"[{name}]")
@@ -61,21 +62,25 @@ def setup_logging() -> None:
         logging.getLogger(name).propagate = True
 
 
+async def _to_thread(fn, timeout: float):
+    return await asyncio.wait_for(asyncio.to_thread(fn), timeout=timeout)
+
+
 async def publisher_loop(stop: asyncio.Event) -> None:
-    last_pages = 0.0
+    last_attempt = 0.0
     first = True
     while not stop.is_set():
         try:
-            publisher.write_local()
+            await _to_thread(publisher.write_local, timeout=30)
         except Exception:
             log.exception("local publish failed")
         now = __import__("time").time()
         interval = float(config.get("desk.pages_push_s"))
-        if first or (now - last_pages) >= interval:
+        if first or (now - last_attempt) >= interval:
             first = False
+            last_attempt = now
             try:
-                if publisher.publish_pages():
-                    last_pages = now
+                await _to_thread(publisher.publish_pages, timeout=publisher.GIT_PUSH_TIMEOUT_S + 30)
             except Exception:
                 log.exception("pages publish failed")
         try:
@@ -122,49 +127,82 @@ async def night_start_notice() -> None:
     await push(msg, kind="night")
 
 
+async def supervised(name: str, factory, stop: asyncio.Event) -> None:
+    """Restart an agent loop if it crashes; stop only when the desk is stopping."""
+    while not stop.is_set():
+        try:
+            await factory(stop)
+            if not stop.is_set():
+                log.warning("%s stopped unexpectedly; restarting", name)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("%s crashed; restarting", name)
+        if stop.is_set():
+            break
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=1)
+        except asyncio.TimeoutError:
+            continue
+
+
+def _ensure_defaults() -> None:
+    existing = {r["key"] for r in db.q("SELECT key FROM settings")}
+    defaults = {
+        "desk.paper_start_stack": 200,
+        "desk.mode": "PAPER",
+        "analyst.mode": "jev",
+        "desk.fomo_handle": "WillLarp",
+    }
+    for key, value in defaults.items():
+        if key not in existing:
+            config.set_value(key, value)
+            db.save_setting(key, value, None)
+
+
 async def amain() -> None:
     setup_logging()
     paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
     Path(paths.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     db.init()
-    # paper start stack as specified
-    if "desk.paper_start_stack" not in {r["key"] for r in db.q("SELECT key FROM settings")}:
-        config.set_value("desk.paper_start_stack", 200)
-        db.save_setting("desk.paper_start_stack", 200, None)
-    if "desk.mode" not in {r["key"] for r in db.q("SELECT key FROM settings")}:
-        config.set_value("desk.mode", "PAPER")
-        db.save_setting("desk.mode", "PAPER", None)
-    if "analyst.mode" not in {r["key"] for r in db.q("SELECT key FROM settings")}:
-        config.set_value("analyst.mode", "jev")
-        db.save_setting("analyst.mode", "jev", None)
-    if "desk.fomo_handle" not in {r["key"] for r in db.q("SELECT key FROM settings")}:
-        config.set_value("desk.fomo_handle", "WillLarp")
-        db.save_setting("desk.fomo_handle", "WillLarp", None)
+    _ensure_defaults()
+    existed_night = db.current_night() is not None
     db.start_night(config.get("desk.mode"))
-    log.info("desk starting mode=%s python=%s", config.get("desk.mode"), sys.version.split()[0])
+    log.info(
+        "desk starting mode=%s python=%s night=%s",
+        config.get("desk.mode"),
+        sys.version.split()[0],
+        "resumed" if existed_night else "new",
+    )
     stop = asyncio.Event()
+    watchdog.start()
     tasks = [
-        asyncio.create_task(scanner.run(stop), name="scanner"),
-        asyncio.create_task(auditor.run(stop), name="auditor"),
-        asyncio.create_task(analyst.run(stop), name="analyst"),
-        asyncio.create_task(executor.run(stop), name="executor"),
-        asyncio.create_task(risk.run(stop), name="risk"),
-        asyncio.create_task(__import__("telegram_bot").run(stop), name="telegram"),
+        asyncio.create_task(supervised("scanner", scanner.run, stop), name="scanner"),
+        asyncio.create_task(supervised("auditor", auditor.run, stop), name="auditor"),
+        asyncio.create_task(supervised("analyst", analyst.run, stop), name="analyst"),
+        asyncio.create_task(supervised("executor", executor.run, stop), name="executor"),
+        asyncio.create_task(supervised("risk", risk.run, stop), name="risk"),
+        asyncio.create_task(supervised("telegram", __import__("telegram_bot").run, stop), name="telegram"),
         asyncio.create_task(publisher_loop(stop), name="publisher"),
         asyncio.create_task(report_loop(stop), name="report"),
+        asyncio.create_task(watchdog.ticker(stop), name="watchdog-tick"),
     ]
+    if not existed_night:
+        try:
+            await night_start_notice()
+        except Exception:
+            log.exception("night start notice failed")
+    else:
+        log.info("skipped night-start push; resuming open night")
+    # write first snapshot off the event loop
     try:
-        await night_start_notice()
-    except Exception:
-        log.exception("night start notice failed")
-    # write first snapshot immediately
-    try:
-        publisher.write_local()
+        await _to_thread(publisher.write_local, timeout=30)
     except Exception:
         log.exception("first snapshot failed")
 
     def _stop(*_):
         stop.set()
+        watchdog.stop()
 
     import signal as _signal
 
@@ -175,6 +213,7 @@ async def amain() -> None:
         except NotImplementedError:
             pass
     await stop.wait()
+    watchdog.stop()
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)

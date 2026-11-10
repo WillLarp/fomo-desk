@@ -19,6 +19,11 @@ from util import ts
 
 log = logging.getLogger("publisher")
 
+# Local git commands should be quick; the force-push can stall on the network
+# or the credential helper, so it gets a longer but still finite cap.
+GIT_LOCAL_TIMEOUT_S = 30
+GIT_PUSH_TIMEOUT_S = 90
+
 SECRET_KEYS = ("TYPESAFE_API_KEY", "TG_TOKEN", "DATA_PATH", "VAPID_PRIVATE_KEY", "APP_TOKEN")
 
 
@@ -346,6 +351,26 @@ def coin_doc(mint: str) -> dict:
     }
 
 
+
+def _run_git(cmd: list[str], timeout: float, env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
+    """Run a git command with a hard timeout. Never log stdout/stderr (may contain URLs)."""
+    kw: dict = {
+        "capture_output": True,
+        "timeout": timeout,
+        "check": False,
+    }
+    if env is not None:
+        kw["env"] = env
+    try:
+        r = subprocess.run(cmd, **kw)
+    except subprocess.TimeoutExpired as e:
+        log.warning("git command timed out after %.0fs", timeout)
+        raise e
+    if check and r.returncode != 0:
+        raise subprocess.CalledProcessError(r.returncode, cmd)
+    return r
+
+
 def publish_pages() -> bool:
     """Orphan gh-pages force-push of web/ + d/{DATA_PATH}/ as a single commit.
 
@@ -378,35 +403,44 @@ def publish_pages() -> bool:
         (tmp / ".nojekyll").write_text("")
         # 404 at root (already in web/ if present)
         git = ["git", "-C", str(tmp)]
-        subprocess.run(["git", "init", "-q", str(tmp)], check=True, capture_output=True)
-        subprocess.run(git + ["checkout", "-q", "-b", "gh-pages"], check=True, capture_output=True)
-        subprocess.run(git + ["add", "-A"], check=True, capture_output=True)
+        _run_git(["git", "init", "-q", str(tmp)], timeout=GIT_LOCAL_TIMEOUT_S)
+        _run_git(git + ["checkout", "-q", "-b", "gh-pages"], timeout=GIT_LOCAL_TIMEOUT_S)
+        _run_git(git + ["add", "-A"], timeout=GIT_LOCAL_TIMEOUT_S)
         env = os.environ.copy()
         env["GIT_AUTHOR_NAME"] = env.get("GIT_AUTHOR_NAME", "fomo-desk")
         env["GIT_AUTHOR_EMAIL"] = env.get("GIT_AUTHOR_EMAIL", "desk@local")
         env["GIT_COMMITTER_NAME"] = env["GIT_AUTHOR_NAME"]
         env["GIT_COMMITTER_EMAIL"] = env["GIT_AUTHOR_EMAIL"]
-        subprocess.run(
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GCM_INTERACTIVE"] = "never"
+        _run_git(
             git + ["commit", "-q", "-m", "publish desk data"],
-            check=True,
-            capture_output=True,
+            timeout=GIT_LOCAL_TIMEOUT_S,
             env=env,
         )
-        # remote from the main checkout
-        remote = subprocess.check_output(
+        # remote from the main checkout — never log the URL
+        remote = _run_git(
             ["git", "-C", str(repo_dir), "remote", "get-url", "origin"],
-            text=True,
-        ).strip()
-        subprocess.run(git + ["remote", "add", "origin", remote], check=True, capture_output=True)
-        r = subprocess.run(
-            git + ["push", "-q", "--force", "origin", "gh-pages"],
-            capture_output=True,
-            text=True,
-        )
+            timeout=GIT_LOCAL_TIMEOUT_S,
+        ).stdout.decode().strip()
+        _run_git(git + ["remote", "add", "origin", remote], timeout=GIT_LOCAL_TIMEOUT_S)
+        try:
+            r = _run_git(
+                git + ["push", "-q", "--force", "origin", "gh-pages"],
+                timeout=GIT_PUSH_TIMEOUT_S,
+                env=env,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning("pages push timed out")
+            return False
         if r.returncode != 0:
             log.warning("pages push failed")
             return False
         log.info("pages published")
         return True
+    except subprocess.TimeoutExpired:
+        log.warning("pages publish timed out")
+        return False
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

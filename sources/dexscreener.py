@@ -9,7 +9,7 @@ from typing import Any
 
 import config
 from fields import dig, pumpswap_pair
-from sources.http import client
+from sources.http import get as http_get
 
 log = logging.getLogger("dexscreener")
 
@@ -70,14 +70,20 @@ def _i(v):
 
 async def _throttle() -> None:
     cap = int(config.get("scanner.dex_limit_per_min"))
+    wait = 0.0
     async with _lock:
         now = time.time()
         while _window and now - _window[0] > 60:
             _window.pop(0)
         if len(_window) >= cap:
             wait = 60 - (now - _window[0]) + 0.05
-            await asyncio.sleep(max(0.0, wait))
-        _window.append(time.time())
+    if wait > 0:
+        await asyncio.sleep(max(0.0, wait))
+    async with _lock:
+        now = time.time()
+        while _window and now - _window[0] > 60:
+            _window.pop(0)
+        _window.append(now)
 
 
 async def fetch_pairs(mints: list[str]) -> dict[str, dict]:
@@ -91,7 +97,7 @@ async def fetch_pairs(mints: list[str]) -> dict[str, dict]:
         await _throttle()
         url = BASE + ",".join(batch)
         try:
-            r = await client().get(url)
+            r = await http_get(url)
         except httpx.HTTPError as e:
             log.warning("dexscreener error: %s", type(e).__name__)
             continue

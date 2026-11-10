@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from sources.http import client
+from sources.http import post as http_post
 
 log = logging.getLogger("jev")
 
@@ -47,7 +47,7 @@ async def ask(state: str, timeout_s: float = 10.0) -> dict:
         raise JevError("no answer")
     payload = {"model": "jev-latest", "state": state, "questions": QUESTIONS}
     try:
-        r = await client().post(
+        r = await http_post(
             URL,
             json=payload,
             headers={"Authorization": f"Bearer {key}"},

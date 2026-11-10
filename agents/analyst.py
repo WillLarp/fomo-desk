@@ -290,8 +290,9 @@ async def run(stop: asyncio.Event) -> None:
     db.beat("analyst", "running", "idle")
     while not stop.is_set():
         try:
-            item = await asyncio.wait_for(bus.analyst.get(), timeout=1.0)
+            item = await asyncio.wait_for(bus.analyst.get(), timeout=15.0)
         except asyncio.TimeoutError:
+            db.beat("analyst", "paused" if db.is_paused("analyst") else "running", "idle")
             continue
         scan = item.get("scan") or {}
         audit = item.get("audit") or {}

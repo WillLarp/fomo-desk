@@ -302,8 +302,9 @@ async def run(stop: asyncio.Event) -> None:
     card()
     while not stop.is_set():
         try:
-            item = await asyncio.wait_for(bus.executor.get(), timeout=1.0)
+            item = await asyncio.wait_for(bus.executor.get(), timeout=15.0)
         except asyncio.TimeoutError:
+            db.beat("executor", "paused" if db.is_paused("executor") else "running", "idle")
             continue
         try:
             result = await handle(item)

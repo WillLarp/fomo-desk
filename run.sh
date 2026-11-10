@@ -1,31 +1,60 @@
 #!/usr/bin/env bash
 # Idempotent start/stop/status for the desk process.
+# start launches a supervisor that relaunches main.py if it exits
+# (watchdog self-restart or a crash). stop writes a flag so the
+# supervisor does not relaunch, then signals both processes.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 PIDFILE="$ROOT/data/desk.pid"
+SUPFILE="$ROOT/data/supervisor.pid"
+STOPFILE="$ROOT/data/desk.stop"
 LOG="$ROOT/logs/desk.stdout"
 PY="$ROOT/.venv/bin/python"
 mkdir -p "$ROOT/data" "$ROOT/logs"
+
+load_secrets() {
+  if [[ -f /home/box/.desk_secrets ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source /home/box/.desk_secrets
+    set +a
+  fi
+}
 
 is_running() {
   if [[ -f "$PIDFILE" ]]; then
     local pid
     pid="$(cat "$PIDFILE" 2>/dev/null || true)"
     if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
-      # confirm it is our process
       if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "main.py"; then
         echo "$pid"
         return 0
       fi
     fi
   fi
-  # fallback: find existing
   local p
   p="$(pgrep -f "$ROOT/main.py" | head -n1 || true)"
   if [[ -n "${p:-}" ]]; then
     echo "$p"
     return 0
+  fi
+  return 1
+}
+
+is_supervisor() {
+  if [[ -f "$SUPFILE" ]]; then
+    local pid
+    pid="$(cat "$SUPFILE" 2>/dev/null || true)"
+    if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
+      if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qE "run.sh|_supervise"; then
+        echo "$pid"
+        return 0
+      fi
+      # still treat as supervisor if the pid file points at a live bash
+      echo "$pid"
+      return 0
+    fi
   fi
   return 1
 }
@@ -41,6 +70,10 @@ case "$cmd" in
     exit 1
     ;;
   stop)
+    touch "$STOPFILE"
+    if sup="$(is_supervisor)"; then
+      kill "$sup" 2>/dev/null || true
+    fi
     if pid="$(is_running)"; then
       kill "$pid" 2>/dev/null || true
       for i in 1 2 3 4 5; do
@@ -48,11 +81,12 @@ case "$cmd" in
         sleep 1
       done
       kill -9 "$pid" 2>/dev/null || true
-      rm -f "$PIDFILE"
-      echo "stopped"
-    else
-      echo "not running"
     fi
+    if sup="$(is_supervisor)"; then
+      kill -9 "$sup" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE" "$SUPFILE"
+    echo "stopped"
     ;;
   restart)
     "$0" stop || true
@@ -61,10 +95,7 @@ case "$cmd" in
   health)
     if pid="$(is_running)"; then
       echo "ok pid=$pid"
-      if [[ -f "$ROOT/data/publish/d/.keep" ]]; then
-        true
-      fi
-      # heartbeat freshness
+      # scanner and risk must stay fresh; other agents may be idle
       "$PY" - <<'PY'
 import time, sys
 sys.path.insert(0, ".")
@@ -73,11 +104,16 @@ db.init()
 now = time.time()
 rows = db.q("SELECT name, ts, status, detail FROM heartbeats")
 ok = True
+required = {"scanner", "risk"}
 for r in rows:
     age = now - (r["ts"] or 0)
-    flag = "ok" if age < 180 else "STALE"
-    if flag != "ok":
-        ok = False
+    need = r["name"] in required
+    if need:
+        flag = "ok" if age < 180 else "STALE"
+        if flag != "ok":
+            ok = False
+    else:
+        flag = "ok" if age < 180 else "idle"
     print(f"{r['name']}: {r['status']} {r['detail'] or ''} age={age:.0f}s {flag}")
 if not rows:
     print("no heartbeats yet")
@@ -89,6 +125,32 @@ PY
       exit 1
     fi
     ;;
+  _supervise)
+    # Internal: relaunch main.py until STOPFILE appears.
+    trap 'touch "$STOPFILE"; if [[ -f "$PIDFILE" ]]; then kill "$(cat "$PIDFILE")" 2>/dev/null || true; fi; exit 0' TERM INT
+    rm -f "$STOPFILE"
+    while true; do
+      if [[ -f "$STOPFILE" ]]; then
+        exit 0
+      fi
+      load_secrets
+      if [[ -z "${TYPESAFE_API_KEY:-}" || -z "${TG_TOKEN:-}" ]]; then
+        echo "TYPESAFE_API_KEY or TG_TOKEN missing" >&2
+        exit 1
+      fi
+      "$PY" "$ROOT/main.py" >>"$LOG" 2>&1 < /dev/null &
+      echo $! > "$PIDFILE"
+      set +e
+      wait $! 2>/dev/null
+      code=$?
+      set -e
+      if [[ -f "$STOPFILE" ]]; then
+        exit 0
+      fi
+      echo "$(date '+%Y-%m-%d %H:%M:%S') desk supervisor: exited code=${code}; relaunching in 2s" >>"$LOG"
+      sleep 2
+    done
+    ;;
   start|*)
     if pid="$(is_running)"; then
       echo "already running pid=$pid"
@@ -98,26 +160,22 @@ PY
       echo "missing venv at $PY" >&2
       exit 1
     fi
-    # load secrets (DATA_PATH, tokens) without printing them
-    if [[ -f /home/box/.desk_secrets ]]; then
-      set -a
-      # shellcheck disable=SC1091
-      source /home/box/.desk_secrets
-      set +a
-    fi
+    load_secrets
     if [[ -z "${TYPESAFE_API_KEY:-}" || -z "${TG_TOKEN:-}" ]]; then
       echo "TYPESAFE_API_KEY or TG_TOKEN missing" >&2
       exit 1
     fi
-    # survive this shell
-    setsid nohup "$PY" "$ROOT/main.py" >>"$LOG" 2>&1 < /dev/null &
-    echo $! > "$PIDFILE"
-    sleep 0.3
-    if pid="$(is_running)"; then
-      echo "started pid=$pid"
-    else
-      echo "failed to start; see $LOG" >&2
-      exit 1
-    fi
+    rm -f "$STOPFILE"
+    setsid nohup "$0" _supervise >>"$LOG" 2>&1 < /dev/null &
+    echo $! > "$SUPFILE"
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      if pid="$(is_running)"; then
+        echo "started pid=$pid"
+        exit 0
+      fi
+      sleep 0.3
+    done
+    echo "failed to start; see $LOG" >&2
+    exit 1
     ;;
 esac

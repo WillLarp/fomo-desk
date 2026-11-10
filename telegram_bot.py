@@ -38,7 +38,14 @@ async def _api(method: str, payload: dict | None = None, retries: int = 3) -> di
     last = None
     for i in range(retries):
         try:
-            r = await client().post(url, json=payload or {}, timeout=40.0)
+            r = await asyncio.wait_for(
+                client().post(url, json=payload or {}, timeout=40.0),
+                timeout=42.0,
+            )
+        except asyncio.TimeoutError as e:
+            last = e
+            await asyncio.sleep(1 + i)
+            continue
         except httpx.HTTPError as e:
             last = e
             await asyncio.sleep(1 + i)

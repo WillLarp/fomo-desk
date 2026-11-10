@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 from fields import dig
-from sources.http import client
+from sources.http import get as http_get
 
 log = logging.getLogger("rugcheck")
 
@@ -18,7 +18,7 @@ GRAPH = "https://api.rugcheck.xyz/v1/tokens/{mint}/insiders/graph"
 async def report(mint: str) -> tuple[dict | None, str | None]:
     """-> (report dict, error reason)."""
     try:
-        r = await client().get(REPORT.format(mint=mint), timeout=20.0)
+        r = await http_get(REPORT.format(mint=mint), timeout=15.0)
     except httpx.HTTPError as e:
         log.warning("report error %s: %s", mint[:8], type(e).__name__)
         return None, type(e).__name__
@@ -34,7 +34,7 @@ async def report(mint: str) -> tuple[dict | None, str | None]:
 async def insiders_graph(mint: str) -> tuple[Any, str | None]:
     """-> (raw body, error). Body may be [] or an object."""
     try:
-        r = await client().get(GRAPH.format(mint=mint), timeout=20.0)
+        r = await http_get(GRAPH.format(mint=mint), timeout=15.0)
     except httpx.HTTPError as e:
         log.warning("graph error %s: %s", mint[:8], type(e).__name__)
         return None, type(e).__name__

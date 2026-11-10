@@ -9,7 +9,7 @@ import httpx
 
 import config
 from fields import dig
-from sources.http import client
+from sources.http import post as http_post
 
 log = logging.getLogger("rpc")
 
@@ -20,11 +20,11 @@ TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 
 
-async def _call(method: str, params: list, timeout: float = 30.0) -> tuple[Any, str | None]:
+async def _call(method: str, params: list, timeout: float = 12.0) -> tuple[Any, str | None]:
     url = str(config.get("desk.rpc_url"))
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     try:
-        r = await client().post(url, json=payload, timeout=timeout)
+        r = await http_post(url, json=payload, timeout=timeout)
     except httpx.HTTPError as e:
         log.warning("rpc %s error: %s", method, type(e).__name__)
         return None, type(e).__name__
@@ -123,7 +123,7 @@ async def get_program_accounts_for_mint(mint: str) -> tuple[list, str | None]:
             TOKEN_PROGRAM,
             {"encoding": "jsonParsed", "filters": filt, "commitment": "confirmed"},
         ],
-        timeout=60.0,
+        timeout=15.0,
     )
     if err:
         errors.append(f"token: {err}")
@@ -140,7 +140,7 @@ async def get_program_accounts_for_mint(mint: str) -> tuple[list, str | None]:
                 "commitment": "confirmed",
             },
         ],
-        timeout=60.0,
+        timeout=15.0,
     )
     if err:
         errors.append(f"token2022: {err}")
