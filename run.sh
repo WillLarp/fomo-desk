@@ -258,91 +258,13 @@ PY
     exit 2
     ;;
   _supervise)
-    trap 'touch "$STOPFILE"; for n in '"$INSTANCES"'; do pf="$ROOT/data/i/$n/desk.pid"; if [[ -f "$pf" ]]; then kill "$(cat "$pf")" 2>/dev/null || true; fi; done; exit 0' TERM INT
-    rm -f "$STOPFILE"
-    declare -A started=()
-    launch_one() {
-      local n="$1"
-      load_secrets
-      if [[ -z "${TYPESAFE_API_KEY:-}" || -z "${TG_TOKEN:-}" ]]; then
-        echo "TYPESAFE_API_KEY or TG_TOKEN missing" >&2
-        return 1
-      fi
-      mkdir -p "$ROOT/data/i/$n"
-      rm -f "$(instance_live "$n")"
-      DESK_INSTANCE="$n" "$PY" "$ROOT/main.py" --instance "$n" >>"$LOG" 2>&1 < /dev/null &
-      echo $! > "$(instance_pidfile "$n")"
-      date +%s > "$ROOT/data/i/$n/started"
-      started["$n"]="$(date +%s)"
-      if [[ "$n" == "0" ]]; then
-        echo $! > "$ROOT/data/desk.pid"
-      fi
-    }
-    for n in $INSTANCES; do
-      launch_one "$n"
-    done
-    while true; do
-      if [[ -f "$STOPFILE" ]]; then
-        exit 0
-      fi
-      now="$(date +%s)"
-      for n in $INSTANCES; do
-        pid="$(cat "$(instance_pidfile "$n")" 2>/dev/null || true)"
-        live=0
-        if is_pid_main "${pid:-}"; then
-          live=1
-        fi
-        if [[ "$live" -eq 0 ]]; then
-          if [[ -n "${pid:-}" ]]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') desk supervisor: instance $n exited; relaunching in 2s" >>"$LOG"
-            sleep 2
-          fi
-          if [[ -f "$STOPFILE" ]]; then
-            exit 0
-          fi
-          launch_one "$n"
-          continue
-        fi
-        s="$(cat "$ROOT/data/i/$n/started" 2>/dev/null || echo "${started[$n]:-$now}")"
-        if [ $((now - s)) -lt "$GRACE_S" ]; then
-          continue
-        fi
-        lf="$(instance_live "$n")"
-        sf="$(instance_hb "$n" scanner)"
-        rf="$(instance_hb "$n" risk)"
-        reason=""
-        if [ ! -f "$lf" ]; then
-          reason="liveness file missing"
-        else
-          age=$(( now - $(stat -c %Y "$lf") ))
-          if [ "$age" -gt "$STALE_S" ]; then
-            reason="liveness stale ${age}s"
-          fi
-        fi
-        if [ -z "$reason" ] && [ -f "$sf" ]; then
-          age=$(( now - $(stat -c %Y "$sf") ))
-          if [ "$age" -gt "$STALE_S" ]; then
-            reason="scanner heartbeat stale ${age}s"
-          fi
-        fi
-        if [ -z "$reason" ] && [ -f "$rf" ]; then
-          age=$(( now - $(stat -c %Y "$rf") ))
-          if [ "$age" -gt "$STALE_S" ]; then
-            reason="risk heartbeat stale ${age}s"
-          fi
-        fi
-        if [[ -n "$reason" ]]; then
-          echo "$(date '+%Y-%m-%d %H:%M:%S') desk supervisor: instance $n $reason; kill -9" >>"$LOG"
-          kill -9 "$pid" 2>/dev/null || true
-          sleep 1
-          if [[ -f "$STOPFILE" ]]; then
-            exit 0
-          fi
-          launch_one "$n"
-        fi
-      done
-      sleep "$POLL_S"
-    done
+    # External supervisor: file heartbeats only, never sqlite.
+    load_secrets
+    if [[ -z "${TYPESAFE_API_KEY:-}" || -z "${TG_TOKEN:-}" ]]; then
+      echo "TYPESAFE_API_KEY or TG_TOKEN missing" >&2
+      exit 1
+    fi
+    exec "$PY" "$ROOT/supervise.py"
     ;;
   start|*)
     if pid="$(is_running)"; then

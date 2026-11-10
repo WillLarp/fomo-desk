@@ -236,15 +236,22 @@ def beat(name: str, status: str = "running", detail: str = "", count: int | None
             name = f"{name}:{lease.instance_id()}"
     except Exception:
         pass
-    if count is None:
-        row = q1("SELECT count FROM heartbeats WHERE name=?", (name,))
-        count = int(row["count"]) if row else 0
-    execute(
-        "INSERT INTO heartbeats(name,ts,status,detail,count) VALUES(?,?,?,?,?) "
-        "ON CONFLICT(name) DO UPDATE SET ts=excluded.ts, status=excluded.status, "
-        "detail=excluded.detail, count=excluded.count",
-        (name, now(), status, detail, count),
-    )
+    if not _write_lock.acquire(timeout=0.2):
+        return
+    try:
+        if count is None:
+            row = conn().execute("SELECT count FROM heartbeats WHERE name=?", (name,)).fetchone()
+            count = int(row["count"]) if row else 0
+        conn().execute(
+            "INSERT INTO heartbeats(name,ts,status,detail,count) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(name) DO UPDATE SET ts=excluded.ts, status=excluded.status, "
+            "detail=excluded.detail, count=excluded.count",
+            (name, now(), status, detail, count),
+        )
+    except Exception:
+        pass
+    finally:
+        _write_lock.release()
 
 
 def claim_action(kind: str, key: str) -> bool:
