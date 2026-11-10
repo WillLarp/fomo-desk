@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 STOPFILE = ROOT / "data" / "desk.stop"
 LOG = ROOT / "logs" / "desk.stdout"
 PY = ROOT / ".venv" / "bin" / "python"
+RUNTIME = Path(os.environ.get("DESK_RUNTIME", "/dev/shm/fomo-desk"))
 INSTANCES = (0, 1)
 STALE_S = 8
 GRACE_S = 20
@@ -24,7 +25,7 @@ POLL_S = 1
 
 
 def inst_dir(n: int) -> Path:
-    d = ROOT / "data" / "i" / str(n)
+    d = RUNTIME / str(n)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -47,11 +48,13 @@ def hb_file(n: int, name: str) -> Path:
 
 def log(msg: str) -> None:
     line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} desk supervisor: {msg}\n"
-    try:
-        with LOG.open("a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception:
-        pass
+    for dest in (RUNTIME / "supervisor.log", LOG):
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with dest.open("a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            pass
 
 
 def file_age(path: Path, now: float) -> float | None:
@@ -84,8 +87,12 @@ def launch(n: int) -> int:
     live_file(n).unlink(missing_ok=True)
     env = os.environ.copy()
     env["DESK_INSTANCE"] = str(n)
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a", encoding="utf-8") as out:
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        out = LOG.open("a", encoding="utf-8")
+    except Exception:
+        out = subprocess.DEVNULL
+    try:
         proc = subprocess.Popen(
             [str(PY), str(ROOT / "main.py"), "--instance", str(n)],
             stdout=out,
@@ -95,6 +102,12 @@ def launch(n: int) -> int:
             cwd=str(ROOT),
             start_new_session=True,
         )
+    finally:
+        if out is not subprocess.DEVNULL:
+            try:
+                out.close()
+            except Exception:
+                pass
     pidfile(n).write_text(f"{proc.pid}\n", encoding="utf-8")
     started_file(n).write_text(f"{int(time.time())}\n", encoding="utf-8")
     if n == 0:

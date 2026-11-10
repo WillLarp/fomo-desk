@@ -29,8 +29,12 @@ _held = False
 _lock = threading.Lock()
 
 
+def runtime_root() -> Path:
+    return Path(os.environ.get("DESK_RUNTIME", "/dev/shm/fomo-desk"))
+
+
 def lease_path() -> Path:
-    return Path(os.environ.get("DESK_LEASE", str(paths.ROOT / "data" / "leader.lease")))
+    return Path(os.environ.get("DESK_LEASE", str(runtime_root() / "leader.lease")))
 
 
 def set_id(n: int) -> None:
@@ -38,9 +42,10 @@ def set_id(n: int) -> None:
     _id = int(n)
     os.environ["DESK_INSTANCE"] = str(_id)
     # Per-instance liveness so the supervisor can watch each process.
-    paths.LIVENESS_PATH = paths.ROOT / "data" / "i" / str(_id) / "liveness"
-    paths.PID_FILE = paths.ROOT / "data" / "i" / str(_id) / "desk.pid"
-    paths.LIVENESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    root = runtime_root() / str(_id)
+    root.mkdir(parents=True, exist_ok=True)
+    paths.LIVENESS_PATH = root / "liveness"
+    paths.PID_FILE = root / "desk.pid"
 
 
 def parse_instance(argv: list[str] | None = None) -> int:

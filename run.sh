@@ -14,7 +14,7 @@ INSTANCES="0 1"
 STALE_S=8
 GRACE_S=20
 POLL_S=1
-mkdir -p "$ROOT/data" "$ROOT/logs" "$ROOT/data/i/0" "$ROOT/data/i/1"
+mkdir -p "$ROOT/data" "$ROOT/logs" "${DESK_RUNTIME:-/dev/shm/fomo-desk}/0" "${DESK_RUNTIME:-/dev/shm/fomo-desk}/1"
 
 load_secrets() {
   if [[ -f /home/box/.desk_secrets ]]; then
@@ -25,16 +25,18 @@ load_secrets() {
   fi
 }
 
+RUNTIME="${DESK_RUNTIME:-/dev/shm/fomo-desk}"
+
 instance_pidfile() {
-  echo "$ROOT/data/i/$1/desk.pid"
+  echo "$RUNTIME/$1/desk.pid"
 }
 
 instance_live() {
-  echo "$ROOT/data/i/$1/liveness"
+  echo "$RUNTIME/$1/liveness"
 }
 
 instance_hb() {
-  echo "$ROOT/data/i/$1/$2.hb"
+  echo "$RUNTIME/$1/$2.hb"
 }
 
 is_pid_main() {
@@ -179,8 +181,8 @@ case "$cmd" in
       exit 1
     fi
     leader="none"
-    if [[ -f "$ROOT/data/leader.lease" ]]; then
-      leader="$(head -n1 "$ROOT/data/leader.lease" 2>/dev/null || echo none)"
+    if [[ -f "${DESK_RUNTIME:-/dev/shm/fomo-desk}/leader.lease" ]]; then
+      leader="$(head -n1 "${DESK_RUNTIME:-/dev/shm/fomo-desk}/leader.lease" 2>/dev/null || echo none)"
     fi
     ok=1
     leader_ok=0

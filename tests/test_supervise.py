@@ -9,7 +9,9 @@ import supervise
 
 def _prep(tmp_path, monkeypatch, n=0, started_ago=30, live_ago=None, scanner_ago=None, risk_ago=None):
     monkeypatch.setattr(supervise, "ROOT", tmp_path)
-    d = tmp_path / "data" / "i" / str(n)
+    runtime = tmp_path / "run"
+    monkeypatch.setattr(supervise, "RUNTIME", runtime)
+    d = runtime / str(n)
     d.mkdir(parents=True, exist_ok=True)
     now = time.time()
     (d / "started").write_text(str(now - started_ago), encoding="utf-8")
