@@ -140,8 +140,39 @@ PY
       fi
       "$PY" "$ROOT/main.py" >>"$LOG" 2>&1 < /dev/null &
       echo $! > "$PIDFILE"
+      child=$!
+      rm -f "$ROOT/data/liveness"
       set +e
-      wait $! 2>/dev/null
+      # Watch a liveness file written by the event loop. If Python is
+      # frozen (GIL or a blocked loop), the in-process watchdog may not
+      # run; SIGKILL still works.
+      started=$(date +%s)
+      while kill -0 "$child" 2>/dev/null; do
+        sleep 15
+        if ! kill -0 "$child" 2>/dev/null; then
+          break
+        fi
+        if [[ -f "$STOPFILE" ]]; then
+          break
+        fi
+        now=$(date +%s)
+        if (( now - started < 90 )); then
+          continue
+        fi
+        if [[ ! -f "$ROOT/data/liveness" ]]; then
+          echo "$(date '+%Y-%m-%d %H:%M:%S') desk supervisor: liveness file missing; kill -9" >>"$LOG"
+          kill -9 "$child" 2>/dev/null || true
+          break
+        fi
+        mtime=$(stat -c %Y "$ROOT/data/liveness")
+        age=$(( now - mtime ))
+        if (( age > 150 )); then
+          echo "$(date '+%Y-%m-%d %H:%M:%S') desk supervisor: liveness stale ${age}s; kill -9" >>"$LOG"
+          kill -9 "$child" 2>/dev/null || true
+          break
+        fi
+      done
+      wait "$child" 2>/dev/null
       code=$?
       set -e
       if [[ -f "$STOPFILE" ]]; then

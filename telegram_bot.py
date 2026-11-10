@@ -14,7 +14,7 @@ import config
 import db
 import links
 import paths
-from sources.http import client
+from sources.http import post as http_post
 
 log = logging.getLogger("telegram")
 
@@ -38,10 +38,7 @@ async def _api(method: str, payload: dict | None = None, retries: int = 3) -> di
     last = None
     for i in range(retries):
         try:
-            r = await asyncio.wait_for(
-                client().post(url, json=payload or {}, timeout=40.0),
-                timeout=42.0,
-            )
+            r = await http_post(url, json=payload or {}, timeout=40.0)
         except asyncio.TimeoutError as e:
             last = e
             await asyncio.sleep(1 + i)

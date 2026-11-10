@@ -13,6 +13,7 @@ LOG_DIR = ROOT / "logs"
 WEB_DIR = ROOT / "web"
 PUBLISH_DIR = Path(os.environ.get("DESK_PUBLISH", str(ROOT / "data" / "publish")))
 PID_FILE = ROOT / "data" / "desk.pid"
+LIVENESS_PATH = Path(os.environ.get("DESK_LIVENESS", str(ROOT / "data" / "liveness")))
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:

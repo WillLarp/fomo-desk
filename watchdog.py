@@ -11,9 +11,11 @@ import logging
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 import db
+import paths
 
 log = logging.getLogger("desk")
 
@@ -31,10 +33,30 @@ _thread: threading.Thread | None = None
 _stop = threading.Event()
 
 
+
+def liveness_path():
+    return Path(paths.LIVENESS_PATH)
+
+
+def write_liveness(when: float | None = None) -> None:
+    """Atomic heartbeat file for the run.sh supervisor (works even if Python later freezes)."""
+    when = time.time() if when is None else when
+    try:
+        path = liveness_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(f"{when:.3f}\n", encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
 def touch_loop(when: float | None = None) -> None:
     global _loop_ts
+    when = time.time() if when is None else when
     with _lock:
-        _loop_ts = when if when is not None else time.time()
+        _loop_ts = when
+    write_liveness(when)
 
 
 def loop_age(now: float | None = None) -> float:

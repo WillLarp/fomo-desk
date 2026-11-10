@@ -13,6 +13,7 @@ import watchdog
 
 def _fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "DB_PATH", tmp_path / "watchdog.sqlite")
+    monkeypatch.setattr(paths, "LIVENESS_PATH", tmp_path / "liveness")
     if hasattr(db._local, "con"):
         try:
             db._local.con.close()
@@ -108,3 +109,12 @@ def test_start_night_does_not_reset_open_night(tmp_path, monkeypatch):
     assert night["started_at"] == started
     assert night["ended_at"] is None
     assert night["mode"] == "PAPER"
+
+
+def test_touch_loop_writes_liveness(tmp_path, monkeypatch):
+    _fresh_db(tmp_path, monkeypatch)
+    now = time.time()
+    watchdog.touch_loop(now)
+    path = tmp_path / "liveness"
+    assert path.is_file()
+    assert abs(float(path.read_text()) - now) < 0.01
