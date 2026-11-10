@@ -256,7 +256,7 @@
     var unread = hasUnread() ? '<i class="dot"></i>' : "";
     return '<div class="nav">' +
       '<button class="iconbtn" data-go="account" aria-label="Account"><span class="avatar">' + esc(initial()) + "</span></button>" +
-      '<div class="grow"><button class="nav-title" data-go="account">' + esc(fomoHandle() || "Grok Bot") + ' <span class="chev">›</span></button></div>' +
+      '<div class="grow"><span class="nav-title">Grok Bot <span class="chev">›</span></span></div>' +
       '<button class="iconbtn" data-search aria-label="Search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/></svg></button>' +
       '<button class="iconbtn" data-go="activity" aria-label="Notifications"><svg viewBox="0 0 24 24"><path d="M6.4 9.2a5.6 5.6 0 1 1 11.2 0c0 3.4 1.3 5.3 2.1 6.6H4.3c.8-1.3 2.1-3.2 2.1-6.6z"/><path d="M10 18.2a2 2 0 0 0 4 0"/></svg>' + unread + "</button>" +
       "</div>";
