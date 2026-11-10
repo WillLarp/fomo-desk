@@ -7,7 +7,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 SUPFILE="$ROOT/data/supervisor.pid"
-STOPFILE="$ROOT/data/desk.stop"
+RUNTIME="${DESK_RUNTIME:-/dev/shm/fomo-desk}"
+STOPFILE="$RUNTIME/stop"
 LOG="$ROOT/logs/desk.stdout"
 PY="$ROOT/.venv/bin/python"
 INSTANCES="0 1"
@@ -90,7 +91,7 @@ is_supervisor() {
     local pid
     pid="$(cat "$SUPFILE" 2>/dev/null || true)"
     if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
-      if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qE "run.sh|_supervise"; then
+      if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qE "supervise.py|run.sh|_supervise"; then
         echo "$pid"
         return 0
       fi
@@ -176,88 +177,8 @@ case "$cmd" in
     exec "$0" start
     ;;
   health)
-    if ! is_running >/dev/null; then
-      echo "not running"
-      exit 1
-    fi
-    leader="none"
-    if [[ -f "${DESK_RUNTIME:-/dev/shm/fomo-desk}/leader.lease" ]]; then
-      leader="$(head -n1 "${DESK_RUNTIME:-/dev/shm/fomo-desk}/leader.lease" 2>/dev/null || echo none)"
-    fi
-    ok=1
-    leader_ok=0
-    echo "ok leader=${leader}"
-    for n in $INSTANCES; do
-      if pid="$(instance_pid "$n")"; then
-        loop_a="$(stamp_age "$(instance_live "$n")")"
-        sc_a="$(stamp_age "$(instance_hb "$n" scanner)")"
-        rk_a="$(stamp_age "$(instance_hb "$n" risk)")"
-        flag="ok"
-        role="standby"
-        if [[ "$leader" == "$n" ]]; then
-          role="leader"
-        fi
-        stale_inst=0
-        for a in "$loop_a" "$sc_a" "$rk_a"; do
-          if [[ "$a" == "missing" || "$a" -gt 180 ]]; then
-            stale_inst=1
-          fi
-        done
-        if [[ "$stale_inst" -eq 1 ]]; then
-          flag="STALE"
-          if [[ "$role" == "leader" ]]; then
-            ok=0
-          fi
-        elif [[ "$role" == "leader" ]]; then
-          leader_ok=1
-        fi
-        echo "instance $n: $role pid=$pid loop=${loop_a}s scanner=${sc_a}s risk=${rk_a}s $flag"
-      else
-        echo "instance $n: down"
-        if [[ "$leader" == "$n" ]]; then
-          ok=0
-        fi
-      fi
-    done
-    # sqlite details when possible, 5s busy timeout already set in db.init
-    if "$PY" - <<'PY'
-import time, sys
-sys.path.insert(0, ".")
-import db
-try:
-    db.init()
-except Exception as e:
-    print(f"heartbeats: unavailable ({type(e).__name__})")
-    sys.exit(0)
-now = time.time()
-rows = db.q("SELECT name, ts, status, detail FROM heartbeats")
-required = {"scanner", "risk"}
-ok = True
-for r in rows:
-    age = now - (r["ts"] or 0)
-    need = r["name"] in required
-    if need:
-        flag = "ok" if age < 180 else "STALE"
-        if flag != "ok":
-            ok = False
-    else:
-        flag = "ok" if age < 180 else "idle"
-    print(f"{r['name']}: {r['status']} {r['detail'] or ''} age={age:.0f}s {flag}")
-if not rows:
-    print("no heartbeats yet")
-sys.exit(0)
-PY
-    then
-      :
-    fi
-    # Healthy if a live leader is fresh, or if any instance is fresh while lease is catching up.
-    if [[ "$leader_ok" -eq 1 ]]; then
-      exit 0
-    fi
-    if [[ "$ok" -eq 1 ]] && is_running >/dev/null; then
-      exit 0
-    fi
-    exit 2
+    # File-only, no sqlite. See supervise.health_report for the format.
+    exec "$PY" "$ROOT/supervise.py" health
     ;;
   _supervise)
     # External supervisor: file heartbeats only, never sqlite.
@@ -285,8 +206,9 @@ PY
       echo "TYPESAFE_API_KEY or TG_TOKEN missing" >&2
       exit 1
     fi
+    mkdir -p "$RUNTIME"
     rm -f "$STOPFILE"
-    setsid nohup "$0" _supervise >>"$LOG" 2>&1 < /dev/null &
+    setsid nohup "$0" _supervise >>"$RUNTIME/supervisor.log" 2>&1 < /dev/null &
     echo $! > "$SUPFILE"
     for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
       ok=1

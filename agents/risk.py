@@ -11,6 +11,7 @@ import bus
 import config
 import db
 import lease
+import stamps
 import fees
 import links
 from sources import dexscreener
@@ -300,11 +301,7 @@ async def run(stop: asyncio.Event) -> None:
     async def liveness():
         while not stop.is_set():
             try:
-                if lease.is_leader():
-                    row = db.q1("SELECT detail FROM heartbeats WHERE name=?", ("risk",))
-                    db.beat("risk", "running", (row["detail"] if row else "") or "idle")
-                else:
-                    db.beat("risk", "running", "standby")
+                stamps.stamp_agent("risk")
             except Exception:
                 log.exception("risk liveness beat failed")
             try:

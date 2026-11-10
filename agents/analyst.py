@@ -12,6 +12,7 @@ import bus
 import config
 import db
 import lease
+import stamps
 import pipeline
 from sources import dexscreener, jev
 from util import age_min, as_float, clamp, ts, utcnow_iso
@@ -297,7 +298,7 @@ async def run(stop: asyncio.Event) -> None:
             await pipeline.catch_up()
         was_leader = lead
         if not lead:
-            db.beat("analyst", "running", "standby")
+            stamps.stamp_agent("analyst")
             try:
                 await asyncio.wait_for(stop.wait(), timeout=1.0)
             except asyncio.TimeoutError:
@@ -306,7 +307,7 @@ async def run(stop: asyncio.Event) -> None:
         try:
             item = await asyncio.wait_for(bus.analyst.get(), timeout=1.0)
         except asyncio.TimeoutError:
-            db.beat("analyst", "paused" if db.is_paused("analyst") else "running", "idle")
+            stamps.stamp_agent("analyst")
             continue
         scan = item.get("scan") or {}
         audit = item.get("audit") or {}

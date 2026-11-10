@@ -327,8 +327,12 @@ def upsert_coin(mint: str, **fields: Any) -> None:
         data = {"mint": mint, "first_seen": now(), **fields}
         cols = ", ".join(data)
         ph = ", ".join("?" * len(data))
-        execute(f"INSERT INTO coins ({cols}) VALUES ({ph})", tuple(data.values()))
-        return
+        try:
+            execute(f"INSERT INTO coins ({cols}) VALUES ({ph})", tuple(data.values()))
+            return
+        except sqlite3.IntegrityError:
+            # Another instance inserted the same mint; update instead.
+            pass
     if fields:
         sets = ", ".join(f"{k}=?" for k in fields)
         execute(f"UPDATE coins SET {sets} WHERE mint=?", (*fields.values(), mint))

@@ -12,6 +12,7 @@ import bus
 import config
 import db
 import lease
+import stamps
 import pipeline
 from sources import rpc, rugcheck
 from util import age_min, ts, utcnow_iso
@@ -470,7 +471,7 @@ async def run(stop: asyncio.Event) -> None:
             await pipeline.catch_up()
         was_leader = lead
         if not lead:
-            db.beat("auditor", "running", "standby")
+            stamps.stamp_agent("auditor")
             try:
                 await asyncio.wait_for(stop.wait(), timeout=1.0)
             except asyncio.TimeoutError:
@@ -479,7 +480,7 @@ async def run(stop: asyncio.Event) -> None:
         try:
             scan = await asyncio.wait_for(bus.auditor.get(), timeout=1.0)
         except asyncio.TimeoutError:
-            db.beat("auditor", "paused" if db.is_paused("auditor") else "running", "idle")
+            stamps.stamp_agent("auditor")
             continue
         if db.is_paused("auditor"):
             db.beat("auditor", "paused", "paused")

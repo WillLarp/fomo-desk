@@ -154,3 +154,13 @@ def test_lease_expires_if_loop_stops_ticking(tmp_path):
     lease._enabled = False
     lease._held = False
     lease.set_id(0)
+
+
+def test_upsert_coin_is_idempotent(tmp_path, monkeypatch):
+    _reset_db(tmp_path, monkeypatch)
+    db.upsert_coin("MintABC", name="a", status="waiting")
+    db.upsert_coin("MintABC", name="b", status="waiting")
+    row = db.coin("MintABC")
+    assert row is not None
+    assert row["name"] == "b"
+    assert row["status"] == "waiting"

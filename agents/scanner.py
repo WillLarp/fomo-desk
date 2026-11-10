@@ -11,6 +11,7 @@ import bus
 import config
 import db
 import lease
+import stamps
 from sources import dexscreener, pumpportal, rpc, rugcheck
 from util import age_min, as_float, is_copycat, iso_to_ts, ts, utcnow_iso
 
@@ -291,7 +292,11 @@ async def on_migration(msg: dict) -> None:
     log.info("waiting room %s creator=%s", mint[:8], "yes" if creator else "null")
 
 
-def _touch(detail: str | None = None) -> None:
+def _touch(detail: str | None = None, sql: bool = False) -> None:
+    # 1s liveness must not touch sqlite; a locked db would freeze the loop.
+    stamps.stamp_agent("scanner")
+    if not sql:
+        return
     status = "paused" if db.is_paused("scanner") else "running"
     if detail is None:
         row = db.q1("SELECT detail FROM heartbeats WHERE name=?", ("scanner",))
@@ -301,7 +306,7 @@ def _touch(detail: str | None = None) -> None:
 
 async def _poll_waiting() -> None:
     rows = db.q("SELECT * FROM waiting")
-    _touch(f"{len(rows)} waiting")
+    _touch(f"{len(rows)} waiting", sql=True)
     if not lease.is_leader():
         return
     if not rows:
@@ -361,7 +366,7 @@ async def run(stop: asyncio.Event) -> None:
     for r in db.q("SELECT mint, status FROM coins WHERE first_seen>=?", (start,)):
         if r["status"] in ("passed", "killed", "dropped"):
             _decided.add(r["mint"])
-    db.beat("scanner", "running", "starting")
+    _touch("starting", sql=True)
     poll_s = float(config.get("scanner.poll_s"))
 
     async def poll_loop():
@@ -370,7 +375,7 @@ async def run(stop: asyncio.Event) -> None:
                 if not db.is_paused("scanner"):
                     await _poll_waiting()
                 else:
-                    db.beat("scanner", "paused", "paused")
+                    _touch("paused", sql=True)
             except Exception:
                 log.exception("waiting-room poll failed")
             try:

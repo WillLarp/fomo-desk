@@ -11,6 +11,7 @@ import bus
 import config
 import db
 import lease
+import stamps
 import pipeline
 import links
 from sources import dexscreener
@@ -320,7 +321,7 @@ async def run(stop: asyncio.Event) -> None:
             await pipeline.catch_up()
         was_leader = lead
         if not lead:
-            db.beat("executor", "running", "standby")
+            stamps.stamp_agent("executor")
             try:
                 await asyncio.wait_for(stop.wait(), timeout=1.0)
             except asyncio.TimeoutError:
@@ -329,7 +330,7 @@ async def run(stop: asyncio.Event) -> None:
         try:
             item = await asyncio.wait_for(bus.executor.get(), timeout=1.0)
         except asyncio.TimeoutError:
-            db.beat("executor", "paused" if db.is_paused("executor") else "running", "idle")
+            stamps.stamp_agent("executor")
             continue
         try:
             result = await handle(item)
