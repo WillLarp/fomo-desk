@@ -236,6 +236,7 @@ async def _finish(payload: dict) -> None:
 
 async def on_migration(msg: dict) -> None:
     mint = msg.get("mint")
+    _touch("migration")
     if not mint:
         return
     if mint in _decided:
@@ -283,10 +284,18 @@ async def on_migration(msg: dict) -> None:
     log.info("waiting room %s creator=%s", mint[:8], "yes" if creator else "null")
 
 
+def _touch(detail: str | None = None) -> None:
+    status = "paused" if db.is_paused("scanner") else "running"
+    if detail is None:
+        row = db.q1("SELECT detail FROM heartbeats WHERE name=?", ("scanner",))
+        detail = (row["detail"] if row else "") or "running"
+    db.beat("scanner", status, detail)
+
+
 async def _poll_waiting() -> None:
     rows = db.q("SELECT * FROM waiting")
+    _touch(f"{len(rows)} waiting")
     if not rows:
-        db.beat("scanner", "running", "0 waiting")
         return
     mints = [r["mint"] for r in rows]
     entered = {r["mint"]: r["entered_at"] for r in rows}
@@ -360,12 +369,26 @@ async def run(stop: asyncio.Event) -> None:
             except asyncio.TimeoutError:
                 continue
 
+    async def liveness():
+        while not stop.is_set():
+            try:
+                _touch()
+            except Exception:
+                log.exception("scanner liveness beat failed")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                continue
+
     poll_task = asyncio.create_task(poll_loop())
+    live_task = asyncio.create_task(liveness())
     try:
         await pumpportal.run(on_migration, stop)
     finally:
+        live_task.cancel()
         poll_task.cancel()
-        try:
-            await poll_task
-        except asyncio.CancelledError:
-            pass
+        for task in (live_task, poll_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
