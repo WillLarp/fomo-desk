@@ -198,6 +198,11 @@ async def ticker(stop_event) -> None:
     while not stop_event.is_set():
         touch_loop()
         try:
+            import lease
+            lease.tick()
+        except Exception:
+            log.exception("lease tick failed")
+        try:
             await asyncio.wait_for(stop_event.wait(), timeout=1.0)
         except asyncio.TimeoutError:
             continue

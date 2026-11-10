@@ -71,6 +71,7 @@ lease.set_id(int(sys.argv[3]))
 lease.start()
 path = sys.argv[4]
 while True:
+    lease.tick()
     if lease.is_leader():
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{time.time():.6f}\n")
@@ -127,3 +128,29 @@ while True:
                 pass
             p.kill()
             p.wait(timeout=3)
+
+
+def test_lease_expires_if_loop_stops_ticking(tmp_path):
+    """A process whose event loop is stuck must lose the lease in ~5s
+    even if the process itself (other threads) is still alive."""
+    import threading
+    monkey_lease = tmp_path / "leader.lease"
+    import os
+    os.environ["DESK_LEASE"] = str(monkey_lease)
+    # Reset module-level state
+    lease._enabled = True
+    lease._held = False
+    lease.set_id(0)
+    now = time.time()
+    assert lease.try_acquire(now=now, ttl=5) is True
+    lease.set_id(1)
+    lease._held = False
+    assert lease.try_acquire(now=now + 2, ttl=5) is False
+    t0 = time.monotonic()
+    assert lease.try_acquire(now=now + 5.1, ttl=5) is True
+    elapsed = time.monotonic() - t0
+    assert lease.holder(now=now + 5.1) == 1
+    assert elapsed < 1.0  # file lease acquire itself is immediate once expired
+    lease._enabled = False
+    lease._held = False
+    lease.set_id(0)

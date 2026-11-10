@@ -193,21 +193,30 @@ def _thread_main() -> None:
             return
 
 
+def tick() -> bool:
+    """Renew or acquire from the event loop. A stuck loop cannot tick, so the
+    lease expires and the standby takes over even if other threads still run."""
+    if not _enabled:
+        return True
+    was = is_leader()
+    ok = renew() if was else try_acquire()
+    if ok and not was:
+        log.info("lease acquired instance=%s", instance_id())
+    elif was and not ok:
+        log.warning("lease lost instance=%s", instance_id())
+    return ok
+
+
 def start() -> None:
-    """Enable the lease and start the renewer thread."""
+    """Enable the lease and take it if it is free. Renewal happens in tick()."""
     global _enabled, _thread
     _enabled = True
     _stop.clear()
     try_acquire()
-    if _thread is not None and _thread.is_alive():
-        return
-    _thread = threading.Thread(target=_thread_main, name="lease", daemon=True)
-    _thread.start()
+    # No renewer thread: a blocked event loop must not keep the lease alive.
 
 
 def stop() -> None:
     _stop.set()
-    # Do not release on a clean stop if we are about to be replaced; expiry
-    # lets the standby take over in TTL seconds. Releasing immediately is
-    # better on a planned stop so takeover is instant.
+    # Releasing immediately lets the standby take over on a planned stop.
     release()

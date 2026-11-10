@@ -272,6 +272,7 @@ PY
       rm -f "$(instance_live "$n")"
       DESK_INSTANCE="$n" "$PY" "$ROOT/main.py" --instance "$n" >>"$LOG" 2>&1 < /dev/null &
       echo $! > "$(instance_pidfile "$n")"
+      date +%s > "$ROOT/data/i/$n/started"
       started["$n"]="$(date +%s)"
       if [[ "$n" == "0" ]]; then
         echo $! > "$ROOT/data/desk.pid"
@@ -302,31 +303,31 @@ PY
           launch_one "$n"
           continue
         fi
-        s="${started[$n]:-$now}"
-        if (( now - s < GRACE_S )); then
+        s="$(cat "$ROOT/data/i/$n/started" 2>/dev/null || echo "${started[$n]:-$now}")"
+        if [ $((now - s)) -lt "$GRACE_S" ]; then
           continue
         fi
         lf="$(instance_live "$n")"
         sf="$(instance_hb "$n" scanner)"
         rf="$(instance_hb "$n" risk)"
         reason=""
-        if [[ ! -f "$lf" ]]; then
+        if [ ! -f "$lf" ]; then
           reason="liveness file missing"
         else
           age=$(( now - $(stat -c %Y "$lf") ))
-          if (( age > STALE_S )); then
+          if [ "$age" -gt "$STALE_S" ]; then
             reason="liveness stale ${age}s"
           fi
         fi
-        if [[ -z "$reason" && -f "$sf" ]]; then
+        if [ -z "$reason" ] && [ -f "$sf" ]; then
           age=$(( now - $(stat -c %Y "$sf") ))
-          if (( age > STALE_S )); then
+          if [ "$age" -gt "$STALE_S" ]; then
             reason="scanner heartbeat stale ${age}s"
           fi
         fi
-        if [[ -z "$reason" && -f "$rf" ]]; then
+        if [ -z "$reason" ] && [ -f "$rf" ]; then
           age=$(( now - $(stat -c %Y "$rf") ))
-          if (( age > STALE_S )); then
+          if [ "$age" -gt "$STALE_S" ]; then
             reason="risk heartbeat stale ${age}s"
           fi
         fi
