@@ -2,39 +2,45 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#07080c">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="FOMO Desk">
+<meta name="apple-mobile-web-app-title" content="Grok Bot">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
-<title>FOMO Desk</title>
+<meta name="format-detection" content="telephone=no">
+<title>Grok Bot</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<div id="offlineBar" hidden>The desk is not reachable. Telegram still gets live pushes. Pages can lag about 10 minutes.</div>
 <div id="app">
-  <header class="top">
-    <div>
-      <div class="brand">FOMO Desk <span id="modeBadge" class="badge">PAPER</span></div>
-      <div id="updatedAt" class="muted">Loading…</div>
-    </div>
-    <div id="liveDot" class="dot">connecting</div>
-  </header>
-  <main id="screen"></main>
-  <nav id="tabs">
-    <button data-tab="home" class="on">Home</button>
-    <button data-tab="agents">Agents</button>
-    <button data-tab="activity">Activity</button>
-    <button data-tab="account">Account</button>
+  <div id="pages"></div>
+  <nav id="tabbar" aria-label="Tabs">
+    <button type="button" data-tab="home" class="on" aria-label="Home">
+      <svg viewBox="0 0 28 28" aria-hidden="true"><path d="M4.5 13.2 14 5l9.5 8.2V23a1.5 1.5 0 0 1-1.5 1.5h-5v-6.5h-6v6.5H6A1.5 1.5 0 0 1 4.5 23z"/></svg>
+      <span>Home</span>
+    </button>
+    <button type="button" data-tab="agents" aria-label="Agents">
+      <svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="8" cy="9" r="3.2"/><circle cx="20" cy="9" r="3.2"/><circle cx="14" cy="19" r="3.2"/><path d="M10.6 10.6 12.6 16M17.4 10.6 15.4 16M11.2 9h5.6" fill="none"/></svg>
+      <span>Agents</span>
+    </button>
+    <button type="button" data-tab="activity" aria-label="Activity">
+      <svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3.5 15h4.6l3-8.5 5.8 15 3-6.5h4.6" fill="none"/></svg>
+      <span>Activity</span>
+    </button>
+    <button type="button" data-tab="account" aria-label="Account">
+      <svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="10" r="4.6"/><path d="M5 24c.9-4.6 4.6-7.2 9-7.2s8.1 2.6 9 7.2"/></svg>
+      <span>Account</span>
+    </button>
   </nav>
 </div>
-<div id="toast" hidden></div>
+<div id="sheet-root"></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
 <script src="js/chart.js"></script>
 <script src="js/app.js"></script>
 </body>

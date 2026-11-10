@@ -201,16 +201,25 @@ def all_settings() -> dict[str, dict]:
 
 
 def public_settings() -> dict[str, dict]:
-    """Account-tab shape: value + range, no secrets."""
-    return {
-        k: {
-            "value": get(k),
+    """Account-tab shape: value + range + label, no secrets."""
+    out = {}
+    for k, s in S.items():
+        val = get(k)
+        if k == "desk.rpc_url":
+            # A custom RPC URL may contain a provider API key. Only publish the public default.
+            text = str(val or "")
+            if "api.mainnet-beta.solana.com" not in text:
+                val = "custom"
+        out[k] = {
+            "value": val,
             "min": s.lo,
             "max": s.hi,
             "kind": _kind(s),
+            "label": s.label,
+            "choices": list(s.choices) if s.choices else None,
+            "group": k.split(".", 1)[0],
         }
-        for k, s in S.items()
-    }
+    return out
 
 
 def stack() -> float:

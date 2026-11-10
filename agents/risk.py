@@ -241,6 +241,7 @@ async def poll_once() -> None:
                 db.update("positions", int(pos["id"]), {"no_price_polls": 0})
             continue
         db.add_price(pos["mint"], price, (pair.get("volume") or {}).get("m5"))
+        db.update_market(pos["mint"], pair)
         liq = pair.get("liquidityUsd")
         entry = float(pos["entry_price"])
         peak = max(float(pos.get("peak_price") or entry), price)

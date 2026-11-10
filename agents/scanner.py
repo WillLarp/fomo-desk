@@ -160,6 +160,7 @@ def _payload(mint, name, symbol, pool, liq, top10, h1, age, verdict, reason) -> 
 
 
 async def _decide(mint: str, pair: dict, meta: dict) -> None:
+    db.update_market(mint, pair)
     name = pair.get("name") or meta.get("name") or mint[:6]
     symbol = pair.get("symbol") or meta.get("symbol") or ""
     pool = pair.get("pairAddress") or meta.get("pool")
@@ -296,13 +297,7 @@ async def _poll_waiting() -> None:
         pair = pairs.get(mint)
         if pair and pair.get("priceUsd") is not None:
             db.add_price(mint, pair.get("priceUsd"), (pair.get("volume") or {}).get("m5"))
-            db.upsert_coin(
-                mint,
-                name=pair.get("name"),
-                symbol=pair.get("symbol"),
-                pool=pair.get("pool") or pair.get("pairAddress"),
-                image=pair.get("image"),
-            )
+            db.update_market(mint, pair)
         # drop if never qualified
         if now - (entered.get(mint) or now) >= max_wait:
             if mint in _decided:

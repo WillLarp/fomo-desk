@@ -112,25 +112,49 @@ def snapshot() -> dict:
             }
         )
     ticket = config.ticket_check()
+    start_bal = (
+        float(config.get("desk.paper_start_stack"))
+        if mode == "PAPER"
+        else float(config.get("desk.live_stack") or 0)
+    )
+    multiplier = round(bal / start_bal, 2) if start_bal else 1.0
+    running = sum(1 for a in agents if a.get("status") == "running")
+    act_rows = db.activity_rows(80)
+    latest_act = act_rows[0]["id"] if act_rows else 0
+    telegram_on = Path(paths.ROOT / "owner_chat_id").is_file() or bool(os.environ.get("OWNER_CHAT_ID"))
     state = {
         "balance": bal,
         "todayPct": pct,
         "todayUsd": pnl,
-        "multiplier": round(1 + (pct / 100), 4) if pct is not None else 1,
+        "multiplier": multiplier,
+        "nightStartBalance": start_bal,
         "mode": mode,
         "paused": bool(config.get("desk.paused")),
         "nightStart": db.night_start_ts(),
         "online": True,
         "updatedAt": ts(),
         "unread": 0,
+        "latestActivityId": latest_act,
         "handle": config.get("desk.fomo_handle"),
         "agents": agents,
+        "agentsRunning": running,
         "positions": positions,
         "coins": coins,
         "ticketWarning": ticket.get("message"),
+        "stopPct": config.get("risk.stop_pct"),
+        "trailPct": config.get("risk.trail_pct"),
+        "stackPct": config.get("executor.stack_pct"),
+        "telegramConnected": telegram_on,
     }
-    pts, marks = db.equity_points()
-    chart = {"points": pts, "start": pts[0][1] if pts else bal, "marks": marks, "range": "LIVE"}
+    ranges = {name: db.chart_range(name) for name in ("LIVE", "1H", "4H", "1D", "1W", "ALL")}
+    live = ranges["LIVE"]
+    chart = {
+        "points": live["points"],
+        "start": live["start"],
+        "marks": live["marks"],
+        "range": "LIVE",
+        "ranges": ranges,
+    }
     activity = {
         "rows": [
             {
@@ -145,7 +169,7 @@ def snapshot() -> dict:
                 "value2": r["value2"],
                 "mode": r["mode"],
             }
-            for r in db.activity_rows(80)
+            for r in act_rows
         ]
     }
     handle = str(config.get("desk.fomo_handle") or "")
@@ -159,6 +183,8 @@ def snapshot() -> dict:
         "signup_url": links.SIGNUP_URL,
         "notifier": "telegram",
         "webpush": False,
+        "telegramConnected": telegram_on,
+        "readonly": True,
         "pushNote": "No web push on plan B. Telegram is the only notifier. Settings, pause and mode changes go through Telegram.",
         "ticket_warning": ticket.get("message"),
         "analyst_mode": config.get("analyst.mode"),
@@ -209,6 +235,9 @@ def write_local() -> Path:
     snap = snapshot()
     _write(root, "state.json", snap["state"])
     _write(root, "chart.json", snap["chart"])
+    chart_dir = root / "chart"
+    for name, doc in (snap["chart"].get("ranges") or {}).items():
+        _write(chart_dir, f"{name}.json", doc)
     _write(root, "activity.json", snap["activity"])
     _write(root, "account.json", snap["account"])
     _write(root, "agents.json", snap["agents"])
@@ -231,6 +260,10 @@ def write_local() -> Path:
             audit["name"] = c.get("name")
             audit["symbol"] = c.get("symbol")
             audit["coinUrl"] = links.coin_url(mint, "solana")
+            audit["enabled"] = bool(config.get("auditor.enabled"))
+            sig = db.q1("SELECT size_usd FROM signals WHERE mint=? ORDER BY id DESC LIMIT 1", (mint,))
+            if sig:
+                audit["sizeUsd"] = sig["size_usd"]
             _write(audit_dir, f"{mint}.json", audit)
     # no index in d/ or in the secret folder
     return root
@@ -261,36 +294,55 @@ def coin_doc(mint: str) -> dict:
             "pnlPct": _open_pct(p),
             "mode": p.get("mode"),
         }
-    candles = []
-    for row in db.prices_for(mint, limit=1500):
-        px = row["price"]
-        candles.append([row["ts"], px, px, px, px, row.get("volume_m5") or 0])
+    candles = db.ohlc_candles(mint, limit=400)
     audit = db.latest_audit(mint)
+    scan = db.latest_scan(mint) or {}
     shield = None
+    layers_checked = None
     if audit and audit.get("layers"):
         layers = audit["layers"]
         passed = sum(1 for l in layers if l.get("pass") is True)
-        checked = audit.get("layersChecked") or len([l for l in layers if l.get("pass") is not None])
-        shield = f"{passed}/{checked}" if checked else None
-    latest_price = candles[-1][4] if candles else None
+        layers_checked = audit.get("layersChecked") or len([l for l in layers if l.get("pass") is not None])
+        if layers_checked:
+            shield = f"{passed}/{layers_checked}"
+    latest_price = candles[-1][4] if candles else c.get("last_price")
+    holders = None
+    if audit and audit.get("holders") is not None:
+        holders = audit.get("holders")
+    # layer 8 is the holders / delegations count when present
+    if holders is None and audit and audit.get("layers"):
+        for layer in audit["layers"]:
+            if layer.get("n") == 8 and layer.get("holders") is not None:
+                holders = layer.get("holders")
+    market_cap = c.get("market_cap")
+    liquidity = c.get("liquidity_usd")
+    if liquidity is None:
+        liquidity = scan.get("liquidityUsd")
+    volume24h = c.get("volume_24h")
+    sig = db.q1("SELECT size_usd FROM signals WHERE mint=? ORDER BY id DESC LIMIT 1", (mint,))
     return {
         "mint": mint,
         "name": c.get("name"),
         "symbol": c.get("symbol"),
         "image": c.get("image"),
+        "chain": "solana",
+        "migratedAt": c.get("migrated_at"),
         "ageH": ((ts() - (c.get("migrated_at") or ts())) / 3600) if c.get("migrated_at") else None,
         "price": latest_price,
         "sinceEntryPct": pos["pnlPct"] if pos else None,
         "shield": shield,
-        "marketCap": None,
-        "liquidity": None,
-        "volume24h": None,
-        "holders": (audit or {}).get("holders"),
+        "layersChecked": layers_checked,
+        "auditPassed": bool(audit.get("passed")) if audit else None,
+        "marketCap": market_cap,
+        "liquidity": liquidity,
+        "volume24h": volume24h,
+        "holders": holders,
         "candles": candles,
         "position": pos,
         "exitLine": exit_line,
         "coinUrl": links.coin_url(mint, "solana"),
         "status": c.get("status"),
+        "sizeUsd": (sig["size_usd"] if sig else None),
     }
 
 

@@ -48,7 +48,11 @@ CREATE TABLE IF NOT EXISTS coins (
   first_seen REAL,
   image TEXT,
   status TEXT,
-  night_id INTEGER
+  night_id INTEGER,
+  market_cap REAL,
+  liquidity_usd REAL,
+  volume_24h REAL,
+  last_price REAL
 );
 CREATE TABLE IF NOT EXISTS waiting (
   mint TEXT PRIMARY KEY,
@@ -147,6 +151,7 @@ def init() -> None:
     c = conn()
     with _write_lock:
         c.executescript(SCHEMA)
+    _migrate()
     rows = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings")}
     config.load(rows)
 
@@ -484,39 +489,189 @@ def latest_verdict(mint: str) -> dict | None:
     return dict(row)
 
 
-def equity_points(since: float | None = None, limit: int = 2000) -> list[list]:
-    """Build a simple equity series from fills and exits plus starting stack."""
-    start_stack = float(config.get("desk.paper_start_stack"))
-    mode = config.get("desk.mode")
-    if mode == "LIVE":
-        start_stack = float(config.get("desk.live_stack") or start_stack)
-    night = night_start_ts() if since is None else since
+def _migrate() -> None:
+    """Add columns introduced after the first night without breaking existing DBs."""
+    cols = {r["name"] for r in q("PRAGMA table_info(coins)")}
+    for name, typ in (
+        ("market_cap", "REAL"),
+        ("liquidity_usd", "REAL"),
+        ("volume_24h", "REAL"),
+        ("last_price", "REAL"),
+    ):
+        if name not in cols:
+            execute(f"ALTER TABLE coins ADD COLUMN {name} {typ}")
+
+
+def update_market(mint: str, pair: dict | None) -> None:
+    """Persist DexScreener market stats for the Coin screen."""
+    if not mint or not pair:
+        return
+    fields: dict[str, Any] = {}
+    if pair.get("marketCap") is not None:
+        fields["market_cap"] = pair["marketCap"]
+    if pair.get("liquidityUsd") is not None:
+        fields["liquidity_usd"] = pair["liquidityUsd"]
+    vol = pair.get("volume") or {}
+    if isinstance(vol, dict) and vol.get("h24") is not None:
+        fields["volume_24h"] = vol["h24"]
+    if pair.get("priceUsd") is not None:
+        fields["last_price"] = pair["priceUsd"]
+    if pair.get("name"):
+        fields["name"] = pair["name"]
+    if pair.get("symbol"):
+        fields["symbol"] = pair["symbol"]
+    if pair.get("image"):
+        fields["image"] = pair["image"]
+    pool = pair.get("pool") or pair.get("pairAddress")
+    if pool:
+        fields["pool"] = pool
+    if fields:
+        upsert_coin(mint, **fields)
+
+
+def ohlc_candles(mint: str, limit: int = 400) -> list[list]:
+    """1-minute OHLC from db.prices. Volume bar = change of DexScreener volume.m5."""
+    rows = prices_for(mint, limit=8000)
+    if not rows:
+        return []
+    buckets: dict[int, list] = {}
+    order: list[int] = []
+    last_m5 = None
+    for r in rows:
+        if r.get("price") is None:
+            continue
+        minute = int(float(r["ts"]) // 60) * 60
+        px = float(r["price"])
+        m5 = r.get("volume_m5")
+        m5 = float(m5) if m5 is not None else None
+        if minute not in buckets:
+            delta = 0.0
+            if m5 is not None and last_m5 is not None:
+                delta = m5 - last_m5
+                if delta < 0:
+                    delta = m5  # rolling window reset
+            buckets[minute] = [minute, px, px, px, px, max(0.0, delta)]
+            order.append(minute)
+        else:
+            b = buckets[minute]
+            b[2] = max(b[2], px)
+            b[3] = min(b[3], px)
+            b[4] = px
+            if m5 is not None and last_m5 is not None:
+                d = m5 - last_m5
+                b[5] += max(0.0, d if d >= 0 else m5)
+        if m5 is not None:
+            last_m5 = m5
+    out = [buckets[k] for k in order]
+    return out[-limit:]
+
+
+def _start_stack() -> float:
+    if config.get("desk.mode") == "LIVE":
+        return float(config.get("desk.live_stack") or config.get("desk.paper_start_stack"))
+    return float(config.get("desk.paper_start_stack"))
+
+
+def equity_series() -> tuple[list[list], list[dict], float]:
+    """Full equity curve from the first night (or now) plus trade marks."""
+    start_stack = _start_stack()
+    first = q1("SELECT MIN(started_at) AS t FROM nights")
+    origin = float(first["t"]) if first and first["t"] else night_start_ts()
     rows = q(
-        "SELECT opened_at AS t, size_usd AS v, 'buy' AS k, mint, name FROM positions WHERE opened_at>=? "
+        "SELECT opened_at AS t, size_usd AS v, 'buy' AS k, mint, name, stop_pct, exit_reason, pnl_usd "
+        "FROM positions WHERE opened_at IS NOT NULL "
         "UNION ALL "
-        "SELECT exit_ts AS t, pnl_usd AS v, exit_reason AS k, mint, name FROM positions "
-        "WHERE status='closed' AND exit_ts>=? "
-        "ORDER BY t",
-        (night, night),
+        "SELECT exit_ts AS t, pnl_usd AS v, COALESCE(exit_reason, 'exit') AS k, mint, name, stop_pct, exit_reason, pnl_usd "
+        "FROM positions WHERE status='closed' AND exit_ts IS NOT NULL "
+        "ORDER BY t"
     )
-    pts = [[night, start_stack]]
+    pts = [[origin, start_stack]]
     equity = start_stack
-    marks = []
+    marks: list[dict] = []
     for r in rows:
         if r["t"] is None:
             continue
+        name = r["name"] or ""
         if r["k"] == "buy":
-            marks.append({"ts": r["t"], "kind": "buy", "label": f"Bought {r['name'] or ''}", "mint": r["mint"]})
+            marks.append({"ts": r["t"], "kind": "buy", "label": f"Bought {name}".strip(), "mint": r["mint"]})
         else:
-            equity += float(r["v"] or 0)
-            pts.append([r["t"], round(equity, 2)])
-            kind = "win" if (r["v"] or 0) >= 0 else "loss"
             val = float(r["v"] or 0)
-            label = f"+${val:.2f}" if val >= 0 else f"-${abs(val):.2f}"
-            marks.append({"ts": r["t"], "kind": kind, "label": label, "mint": r["mint"]})
-    pts.append([now(), round(paper_balance() if mode == "PAPER" else start_stack + realized_pnl("LIVE"), 2)])
-    return pts, marks
+            equity += val
+            pts.append([r["t"], round(equity, 2)])
+            stop = r["stop_pct"]
+            reason = (r["exit_reason"] or r["k"] or "")
+            if val < 0 and "trail" not in str(reason).lower() and stop is not None:
+                label = f"-{float(stop):g}% · -${abs(val):.2f}"
+                kind = "loss"
+            elif val >= 0:
+                label = f"+${val:.2f}"
+                kind = "win"
+            else:
+                label = f"-${abs(val):.2f}"
+                kind = "loss"
+            marks.append({"ts": r["t"], "kind": kind, "label": label, "mint": r["mint"], "reason": reason})
+    now_v = round(paper_balance() if config.get("desk.mode") == "PAPER" else start_stack + realized_pnl("LIVE"), 2)
+    pts.append([now(), now_v])
+    return pts, marks, start_stack
 
+
+def _value_at(pts: list[list], t: float, fallback: float) -> float:
+    if not pts:
+        return fallback
+    if t <= pts[0][0]:
+        return float(pts[0][1])
+    prev = pts[0]
+    for p in pts[1:]:
+        if p[0] >= t:
+            if p[0] == prev[0]:
+                return float(p[1])
+            k = (t - prev[0]) / (p[0] - prev[0])
+            return float(prev[1]) + (float(p[1]) - float(prev[1])) * k
+        prev = p
+    return float(pts[-1][1])
+
+
+RANGE_SECS = {"1H": 3600, "4H": 14400, "1D": 86400, "1W": 604800}
+
+
+def chart_range(name: str) -> dict:
+    """Slice the equity series for LIVE | 1H | 4H | 1D | 1W | ALL."""
+    pts, marks, start_stack = equity_series()
+    now_t = now()
+    name = (name or "LIVE").upper()
+    if name == "ALL":
+        t0 = pts[0][0] if pts else now_t - 1
+        start = float(pts[0][1]) if pts else start_stack
+    elif name == "LIVE" or name not in RANGE_SECS:
+        name = "LIVE"
+        t0 = night_start_ts()
+        start = start_stack
+    else:
+        t0 = now_t - RANGE_SECS[name]
+        start = _value_at(pts, t0, start_stack)
+    sliced = [p for p in pts if p[0] >= t0]
+    if not sliced or sliced[0][0] > t0:
+        sliced = [[t0, round(start, 2)]] + sliced
+    if not sliced or sliced[-1][0] < now_t:
+        last = sliced[-1][1] if sliced else start
+        sliced.append([now_t, last])
+    ms = [m for m in marks if t0 <= (m.get("ts") or 0) <= now_t]
+    return {"points": sliced, "start": start, "marks": ms, "range": name}
+
+
+def equity_points(since: float | None = None, limit: int = 2000) -> tuple[list[list], list[dict]]:
+    """Back-compat: LIVE (or since=) window of the equity curve."""
+    if since is None:
+        doc = chart_range("LIVE")
+    else:
+        doc = chart_range("ALL")
+        t0 = since
+        pts = [p for p in doc["points"] if p[0] >= t0]
+        start = _value_at(doc["points"], t0, doc["start"])
+        if not pts or pts[0][0] > t0:
+            pts = [[t0, round(start, 2)]] + pts
+        doc = {"points": pts[-limit:], "marks": [m for m in doc["marks"] if (m.get("ts") or 0) >= t0], "start": start}
+    return doc["points"], doc["marks"]
 
 def decisions(agent: str, limit: int = 40) -> list[dict]:
     if agent == "scanner":
