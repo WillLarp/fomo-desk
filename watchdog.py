@@ -74,8 +74,31 @@ def inspect(now: float | None = None, started_at: float | None = None) -> dict:
     return {"ok": not reasons, "reasons": reasons, "ages": ages, "grace": False}
 
 
+def _dump_stacks(reasons: list[str]) -> None:
+    """Write all thread stacks for later diagnosis. Tracebacks have no locals, so no secrets."""
+    try:
+        import faulthandler
+
+        import paths
+
+        paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        stack_path = paths.LOG_DIR / "watchdog-stack.log"
+        with stack_path.open("a") as f:
+            f.write(f"\n======= {time.strftime('%Y-%m-%d %H:%M:%S')} reasons={reasons} =======\n")
+            faulthandler.dump_traceback(file=f, all_threads=True)
+    except Exception:
+        log.exception("watchdog failed to dump stacks")
+
+
 def restart(reasons: list[str], exit_fn: Callable[[int], None] | None = None) -> None:
-    log.error("watchdog: self-restart (%s)", "; ".join(reasons) or "stale")
+    ages = inspect().get("ages") or {}
+    log.error(
+        "watchdog: self-restart (%s) ages=%s",
+        "; ".join(reasons) or "stale",
+        {k: round(v) for k, v in ages.items()},
+    )
+    if exit_fn is None:
+        _dump_stacks(reasons)
     for h in logging.getLogger().handlers:
         try:
             h.flush()

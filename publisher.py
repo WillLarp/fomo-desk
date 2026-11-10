@@ -386,6 +386,8 @@ def publish_pages() -> bool:
         return False
     data = paths.local_data_dir()
     # build a temp tree without echoing the secret path
+    t0 = __import__("time").monotonic()
+    log.info("pages push starting")
     tmp = Path(tempfile.mkdtemp(prefix="desk-pages-"))
     try:
         for item in web.iterdir():
@@ -437,7 +439,7 @@ def publish_pages() -> bool:
         if r.returncode != 0:
             log.warning("pages push failed")
             return False
-        log.info("pages published")
+        log.info("pages published in %.1fs", __import__("time").monotonic() - t0)
         return True
     except subprocess.TimeoutExpired:
         log.warning("pages publish timed out")
